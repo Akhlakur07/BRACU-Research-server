@@ -22,24 +22,42 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
+    const db = client.db("bracu-admin");
+    const studentCollection = db.collection("students");
+    const supervisorCollection = db.collection("supervisors");
+
+    // Route for student registration
+    app.post("/students", async (req, res) => {
+      const student = req.body;
+      console.log("Student added:", student);
+      const result = await studentCollection.insertOne(student);
+      res.send(result);
+    });
+
+    // Route for supervisor registration
+    app.post("/supervisors", async (req, res) => { 
+      const supervisor = req.body;
+      console.log("Supervisor added:", supervisor);
+      const result = await supervisorCollection.insertOne(supervisor);
+      res.send(result);
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
-  } finally {
-    // Ensures that the client will close when you finish/error
-    await client.close();
+  } catch (error) {
+    console.error("Error connecting to MongoDB:", error);
   }
 }
+
+// Start the server after connecting to MongoDB
 run().catch(console.dir);
 
+app.get('/', (req, res) => {
+  res.send('Bracu research server is running!');
+});
 
-
-app.get('/',(req,res) =>{
-    res.send('Bracu research server is running!')
-})
-
-app.listen(port,()=>{
-    console.log(`Server is running on port ${port}`)
-})
+app.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
+});
