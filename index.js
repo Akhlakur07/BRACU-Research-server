@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -11,13 +11,12 @@ app.use(express.json());
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.bkyaozu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
-  }
+  },
 });
 
 async function run() {
@@ -25,39 +24,128 @@ async function run() {
     await client.connect();
     const db = client.db("bracu-admin");
     const userCollection = db.collection("users");
-    // const supervisorCollection = db.collection("supervisors");
 
-    // Route for user registration
+    //register user
     app.post("/users", async (req, res) => {
       const user = req.body;
-      console.log("user added:", user);
       const result = await userCollection.insertOne(user);
       res.send(result);
     });
 
-    // Route for supervisor registration
-    // app.post("/supervisors", async (req, res) => { 
-    //   const supervisor = req.body;
-    //   console.log("Supervisor added:", supervisor);
-    //   const result = await supervisorCollection.insertOne(supervisor);
-    //   res.send(result);
-    // });
+    //Get all users
+    app.get("/users", async (req, res) => {
+      const { role } = req.query;
+      const filter = role ? { role } : {};
+      const result = await userCollection.find(filter).toArray();
+      res.send(result);
+    });
 
-    // Send a ping to confirm a successful connection
+    //update user class
+    // update user class
+    app.patch("/users/:studentId/assign-supervisor", async (req, res) => {
+      try {
+        const { studentId } = req.params;
+        const { supervisorId } = req.body;
+
+        if (!ObjectId.isValid(studentId) || !ObjectId.isValid(supervisorId)) {
+          return res
+            .status(400)
+            .send({ message: "Invalid studentId or supervisorId" });
+        }
+
+        // Ensure supervisor exists and is a supervisor
+        const supervisor = await userCollection.findOne({
+          _id: new ObjectId(supervisorId),
+          role: "supervisor",
+        });
+        if (!supervisor)
+          return res.status(404).send({ message: "Supervisor not found" });
+
+        // Ensure student exists and is a student
+        const student = await userCollection.findOne({
+          _id: new ObjectId(studentId),
+          role: "student",
+        });
+        if (!student)
+          return res.status(404).send({ message: "Student not found" });
+
+        const prevSupervisorId = student.assignedSupervisor?.toString();
+
+        // 1) Update student's assignedSupervisor
+        await userCollection.updateOne(
+          { _id: new ObjectId(studentId) },
+          { $set: { assignedSupervisor: new ObjectId(supervisorId) } }
+        );
+
+        // 2) Add student to the new supervisor's students array
+        await userCollection.updateOne(
+          { _id: new ObjectId(supervisorId) },
+          { $addToSet: { students: new ObjectId(studentId) } }
+        );
+
+        // 3) If reassigned, remove from old supervisor's students list
+        if (prevSupervisorId && prevSupervisorId !== supervisorId) {
+          await userCollection.updateOne(
+            { _id: new ObjectId(prevSupervisorId) },
+            { $pull: { students: new ObjectId(studentId) } }
+          );
+        }
+
+        res.send({ ok: true });
+      } catch (e) {
+        console.error(e);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // Unassign supervisor from a student
+    app.patch("/users/:studentId/unassign-supervisor", async (req, res) => {
+      try {
+        const { studentId } = req.params;
+
+        if (!ObjectId.isValid(studentId)) {
+          return res.status(400).send({ message: "Invalid studentId" });
+        }
+
+        // Ensure student exists and is a student
+        const student = await userCollection.findOne({
+          _id: new ObjectId(studentId),
+          role: "student",
+        });
+        if (!student) {
+          return res.status(404).send({ message: "Student not found" });
+        }
+
+        const prevSupervisorId = student.assignedSupervisor?.toString();
+
+        // 1) Unset student's assignedSupervisor
+        await userCollection.updateOne(
+          { _id: new ObjectId(studentId) },
+          { $unset: { assignedSupervisor: "" } }
+        );
+
+        // 2) Remove student from previous supervisor's students list
+        if (prevSupervisorId) {
+          await userCollection.updateOne(
+            { _id: new ObjectId(prevSupervisorId), role: "supervisor" },
+            { $pull: { students: new ObjectId(studentId) } }
+          );
+        }
+
+        res.send({ ok: true });
+      } catch (e) {
+        console.error(e);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
     await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    console.log("Connected to MongoDB");
   } catch (error) {
-    console.error("Error connecting to MongoDB:", error);
+    console.error("Mongo error:", error);
   }
 }
-
-// Start the server after connecting to MongoDB
 run().catch(console.dir);
 
-app.get('/', (req, res) => {
-  res.send('Bracu research server is running!');
-});
-
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-});
+app.get("/", (req, res) => res.send("Bracu research server is running!"));
+app.listen(port, () => console.log(`Server is running on port ${port}`));
