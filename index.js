@@ -24,24 +24,24 @@ async function run() {
   try {
     await client.connect();
     const db = client.db("bracu-admin");
-    const studentCollection = db.collection("students");
-    const supervisorCollection = db.collection("supervisors");
+    const userCollection = db.collection("users");
+    // const supervisorCollection = db.collection("supervisors");
 
-    // Route for student registration
-    app.post("/students", async (req, res) => {
-      const student = req.body;
-      console.log("Student added:", student);
-      const result = await studentCollection.insertOne(student);
+    // Route for user registration
+    app.post("/users", async (req, res) => {
+      const user = req.body;
+      console.log("user added:", user);
+      const result = await userCollection.insertOne(user);
       res.send(result);
     });
 
     // Route for supervisor registration
-    app.post("/supervisors", async (req, res) => { 
-      const supervisor = req.body;
-      console.log("Supervisor added:", supervisor);
-      const result = await supervisorCollection.insertOne(supervisor);
-      res.send(result);
-    });
+    // app.post("/supervisors", async (req, res) => { 
+    //   const supervisor = req.body;
+    //   console.log("Supervisor added:", supervisor);
+    //   const result = await supervisorCollection.insertOne(supervisor);
+    //   res.send(result);
+    // });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
