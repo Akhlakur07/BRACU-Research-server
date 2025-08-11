@@ -26,6 +26,7 @@ async function run() {
     const db = client.db("bracu-admin");
     const userCollection = db.collection("users");
     const announcementsCollection = db.collection("announcements");
+    const proposalsCollection = db.collection("proposals");
 
     //register user
     app.post("/users", async (req, res) => {
@@ -52,6 +53,53 @@ async function run() {
         return res.status(404).send({ message: "User not found" });
       }
       res.send(user);
+    });
+    // Update only name and photoUrl for a user
+    app.patch("/users/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid user id" });
+        }
+
+        const { name, photoUrl } = req.body;
+
+        // validate and prepare update fields (only allow these two fields)
+        const updateFields = {};
+        if (typeof name === "string" && name.trim() !== "") updateFields.name = name.trim();
+        if (typeof photoUrl === "string") updateFields.photoUrl = photoUrl.trim();
+
+        if (Object.keys(updateFields).length === 0) {
+          return res.status(400).send({ message: "No valid fields to update." });
+        }
+
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateFields }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: "User not found." });
+        }
+
+        const updatedUser = await userCollection.findOne({ _id: new ObjectId(id) });
+        res.send({ success: true, updatedUser });
+      } catch (err) {
+        console.error("PATCH /users/:id error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+    // Delete user
+    app.delete("/users/:id", async (req, res) => {
+      const { id } = req.params;
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: "Invalid user id" });
+      }
+      const result = await userCollection.deleteOne({ _id: new ObjectId(id) });
+      if (result.deletedCount === 0) {
+        return res.status(404).send({ message: "User not found" });
+      }
+      res.send({ message: "User deleted" });
     });
     // Get only supervisors
       app.get("/supervisors", async (req, res) => {
@@ -163,6 +211,8 @@ async function run() {
         res.status(500).send({ message: "Internal server error" });
       }
     });
+
+   
 
     // Post announcement
     app.post("/announcements", async (req, res) => {
