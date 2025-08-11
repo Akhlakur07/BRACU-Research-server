@@ -11,6 +11,7 @@ app.use(express.json());
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.bkyaozu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
+
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -24,6 +25,7 @@ async function run() {
     await client.connect();
     const db = client.db("bracu-admin");
     const userCollection = db.collection("users");
+    const announcementsCollection = db.collection("announcements");
 
     //register user
     app.post("/users", async (req, res) => {
@@ -39,7 +41,30 @@ async function run() {
       const result = await userCollection.find(filter).toArray();
       res.send(result);
     });
-
+    // Get single user by ObjectId
+    app.get("/users/:id", async (req, res) => {
+      const { id } = req.params;
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: "Invalid user id" });
+      }
+      const user = await userCollection.findOne({ _id: new ObjectId(id) });
+      if (!user) {
+        return res.status(404).send({ message: "User not found" });
+      }
+      res.send(user);
+    });
+    // Get only supervisors
+      app.get("/supervisors", async (req, res) => {
+        try {
+          const supervisors = await userCollection
+            .find({ role: "supervisor" })
+            .toArray();
+          res.send(supervisors);
+        } catch (err) {
+          console.error(err);
+          res.status(500).send({ message: "Failed to fetch supervisors" });
+        }
+      });
     //update user class
     // update user class
     app.patch("/users/:studentId/assign-supervisor", async (req, res) => {
@@ -138,6 +163,33 @@ async function run() {
         res.status(500).send({ message: "Internal server error" });
       }
     });
+
+    // Post announcement
+    app.post("/announcements", async (req, res) => {
+      try {
+        const announcement = req.body;
+        announcement.createdAt = new Date();
+        const result = await announcementsCollection.insertOne(announcement);
+        res.status(201).send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to create announcement" });
+      }
+    });
+
+    // Get all announcements
+    app.get("/announcements", async (req, res) => {
+      try {
+        const announcements = await announcementsCollection
+          .find()
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.send(announcements);
+      } catch (err) {
+        res.status(500).send({ message: "Failed to fetch announcements" });
+      }
+    });
+
 
     await client.db("admin").command({ ping: 1 });
     console.log("Connected to MongoDB");
