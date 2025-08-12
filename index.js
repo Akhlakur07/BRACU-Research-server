@@ -161,6 +161,24 @@ async function run() {
       res.send(user);
     });
 
+    // Get a group by admin (for the UI gate)
+    app.get("/groups/by-admin/:adminId", async (req, res) => {
+      try {
+        const { adminId } = req.params;
+        if (!ObjectId.isValid(adminId)) {
+          return res.status(400).send({ message: "Invalid adminId" });
+        }
+        const group = await groupsCollection.findOne({
+          admin: new ObjectId(adminId),
+        });
+        if (!group) return res.status(404).send({ message: "Not found" });
+        res.send(group);
+      } catch (err) {
+        console.error("GET /groups/by-admin/:adminId error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
     app.post("/groups", async (req, res) => {
       try {
         const { name, adminId, researchInterests } = req.body || {};
@@ -208,7 +226,14 @@ async function run() {
           proposalsSubmittedTo: [],
           maxMembers: 5,
         };
-
+        const existing = await groupsCollection.findOne({
+          admin: new ObjectId(adminId),
+        });
+        if (existing) {
+          return res
+            .status(409)
+            .send({ message: "You have already created a group." });
+        }
         const result = await groupsCollection.insertOne(doc);
         const created = await groupsCollection.findOne({
           _id: result.insertedId,
