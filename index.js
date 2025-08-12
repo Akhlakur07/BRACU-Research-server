@@ -246,6 +246,262 @@ async function run() {
       }
     });
 
+    // find groups
+
+    // List all groups (lightweight projection if you want)
+    app.get("/groups", async (req, res) => {
+      try {
+        const groups = await groupsCollection
+          .find({})
+          .project({
+            name: 1,
+            admin: 1,
+            members: 1,
+            researchInterests: 1,
+            assignedSupervisor: 1,
+            proposalsSubmittedTo: 1,
+            maxMembers: 1,
+          })
+          .toArray();
+        res.send(groups);
+      } catch (err) {
+        console.error("GET /groups error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    app.patch("/groups/:groupId/join", async (req, res) => {
+      try {
+        const { groupId } = req.params;
+        const { studentId } = req.body || {};
+
+        if (!ObjectId.isValid(groupId) || !ObjectId.isValid(studentId)) {
+          return res
+            .status(400)
+            .send({ message: "Invalid groupId or studentId" });
+        }
+
+        const group = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+        });
+        if (!group) return res.status(404).send({ message: "Group not found" });
+
+        const studentObjId = new ObjectId(studentId);
+
+        // Ensure student exists & is a student
+        const student = await userCollection.findOne({
+          _id: studentObjId,
+          role: "student",
+        });
+        if (!student)
+          return res.status(404).send({ message: "Student not found" });
+
+        // Block admin from joining their own group
+        if (String(group.admin) === String(studentObjId)) {
+          return res.status(403).send({
+            message: "Group admin cannot join the group they created",
+          });
+        }
+
+        // Already a member?
+        if (group.members.some((m) => String(m) === String(studentObjId))) {
+          return res
+            .status(409)
+            .send({ message: "You are already a member of this group" });
+        }
+
+        // Full?
+        if ((group.members?.length || 0) >= (group.maxMembers || 5)) {
+          return res.status(409).send({ message: "This group is full" });
+        }
+
+        // Add to members
+        const upd = await groupsCollection.updateOne(
+          { _id: new ObjectId(groupId) },
+          { $addToSet: { members: studentObjId } }
+        );
+
+        if (!upd.matchedCount) {
+          return res.status(500).send({ message: "Failed to join group" });
+        }
+
+        const updated = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+        });
+        res.send({ success: true, group: updated });
+      } catch (err) {
+        console.error("PATCH /groups/:groupId/join error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    app.get("/groups/by-member/:studentId", async (req, res) => {
+      try {
+        const { studentId } = req.params;
+        if (!ObjectId.isValid(studentId)) {
+          return res.status(400).send({ message: "Invalid studentId" });
+        }
+        const group = await groupsCollection.findOne({
+          members: new ObjectId(studentId),
+        });
+        if (!group) return res.status(404).send({ message: "Not found" });
+        res.send(group);
+      } catch (err) {
+        console.error("GET /groups/by-member/:studentId error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    app.post("/groups", async (req, res) => {
+      try {
+        const { name, adminId, researchInterests } = req.body || {};
+
+        if (typeof name !== "string" || !name.trim()) {
+          return res.status(400).send({ message: "Group name is required" });
+        }
+        if (!ObjectId.isValid(adminId)) {
+          return res.status(400).send({ message: "Invalid adminId" });
+        }
+        if (
+          !Array.isArray(researchInterests) ||
+          researchInterests.length === 0
+        ) {
+          return res
+            .status(400)
+            .send({ message: "At least one research interest is required" });
+        }
+
+        // ensure admin exists and is a student
+        const admin = await userCollection.findOne({
+          _id: new ObjectId(adminId),
+          role: "student",
+        });
+        if (!admin) {
+          return res.status(404).send({ message: "Admin (student) not found" });
+        }
+
+        // already created a group?
+        const existingAsAdmin = await groupsCollection.findOne({
+          admin: new ObjectId(adminId),
+        });
+        if (existingAsAdmin) {
+          return res
+            .status(409)
+            .send({ message: "You have already created a group." });
+        }
+
+        // already member of any group?
+        const existingAsMember = await groupsCollection.findOne({
+          members: new ObjectId(adminId),
+        });
+        if (existingAsMember) {
+          return res
+            .status(409)
+            .send({ message: "You already belong to a group." });
+        }
+
+        const normInterests = Array.from(
+          new Set(
+            researchInterests
+              .filter((x) => typeof x === "string")
+              .map((x) => x.trim())
+              .filter(Boolean)
+          )
+        );
+
+        const doc = {
+          name: name.trim(),
+          admin: new ObjectId(adminId),
+          members: [new ObjectId(adminId)],
+          researchInterests: normInterests,
+          assignedSupervisor: null,
+          proposalsSubmittedTo: [],
+          maxMembers: 5,
+        };
+
+        const result = await groupsCollection.insertOne(doc);
+        const created = await groupsCollection.findOne({
+          _id: result.insertedId,
+        });
+        res.status(201).send({ success: true, group: created });
+      } catch (err) {
+        console.error("POST /groups error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    app.patch("/groups/:groupId/join", async (req, res) => {
+      try {
+        const { groupId } = req.params;
+        const { studentId } = req.body || {};
+
+        if (!ObjectId.isValid(groupId) || !ObjectId.isValid(studentId)) {
+          return res
+            .status(400)
+            .send({ message: "Invalid groupId or studentId" });
+        }
+
+        const group = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+        });
+        if (!group) return res.status(404).send({ message: "Group not found" });
+
+        const studentObjId = new ObjectId(studentId);
+
+        const student = await userCollection.findOne({
+          _id: studentObjId,
+          role: "student",
+        });
+        if (!student)
+          return res.status(404).send({ message: "Student not found" });
+
+        // already belongs to any group?
+        const belongsSomewhere = await groupsCollection.findOne({
+          members: studentObjId,
+        });
+        if (belongsSomewhere) {
+          return res
+            .status(409)
+            .send({ message: "You already belong to a group." });
+        }
+
+        if (String(group.admin) === String(studentObjId)) {
+          return res
+            .status(403)
+            .send({
+              message: "Group admin cannot join the group they created",
+            });
+        }
+
+        if (group.members.some((m) => String(m) === String(studentObjId))) {
+          return res
+            .status(409)
+            .send({ message: "You are already a member of this group" });
+        }
+
+        if ((group.members?.length || 0) >= (group.maxMembers || 5)) {
+          return res.status(409).send({ message: "This group is full" });
+        }
+
+        const upd = await groupsCollection.updateOne(
+          { _id: new ObjectId(groupId) },
+          { $addToSet: { members: studentObjId } }
+        );
+
+        if (!upd.matchedCount) {
+          return res.status(500).send({ message: "Failed to join group" });
+        }
+
+        const updated = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+        });
+        res.send({ success: true, group: updated });
+      } catch (err) {
+        console.error("PATCH /groups/:groupId/join error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log("Connected to MongoDB");
   } catch (error) {
