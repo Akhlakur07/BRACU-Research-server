@@ -11,7 +11,6 @@ app.use(express.json());
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.bkyaozu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
-
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -27,6 +26,7 @@ async function run() {
     const userCollection = db.collection("users");
     const announcementsCollection = db.collection("announcements");
     const proposalsCollection = db.collection("proposals");
+    const groupsCollection = db.collection("groups");
 
     //register user
     app.post("/users", async (req, res) => {
@@ -66,11 +66,15 @@ async function run() {
 
         // validate and prepare update fields (only allow these two fields)
         const updateFields = {};
-        if (typeof name === "string" && name.trim() !== "") updateFields.name = name.trim();
-        if (typeof photoUrl === "string") updateFields.photoUrl = photoUrl.trim();
+        if (typeof name === "string" && name.trim() !== "")
+          updateFields.name = name.trim();
+        if (typeof photoUrl === "string")
+          updateFields.photoUrl = photoUrl.trim();
 
         if (Object.keys(updateFields).length === 0) {
-          return res.status(400).send({ message: "No valid fields to update." });
+          return res
+            .status(400)
+            .send({ message: "No valid fields to update." });
         }
 
         const result = await userCollection.updateOne(
@@ -82,7 +86,9 @@ async function run() {
           return res.status(404).send({ message: "User not found." });
         }
 
-        const updatedUser = await userCollection.findOne({ _id: new ObjectId(id) });
+        const updatedUser = await userCollection.findOne({
+          _id: new ObjectId(id),
+        });
         res.send({ success: true, updatedUser });
       } catch (err) {
         console.error("PATCH /users/:id error:", err);
@@ -102,117 +108,17 @@ async function run() {
       res.send({ message: "User deleted" });
     });
     // Get only supervisors
-      app.get("/supervisors", async (req, res) => {
-        try {
-          const supervisors = await userCollection
-            .find({ role: "supervisor" })
-            .toArray();
-          res.send(supervisors);
-        } catch (err) {
-          console.error(err);
-          res.status(500).send({ message: "Failed to fetch supervisors" });
-        }
-      });
-    //update user class
-    // update user class
-    app.patch("/users/:studentId/assign-supervisor", async (req, res) => {
+    app.get("/supervisors", async (req, res) => {
       try {
-        const { studentId } = req.params;
-        const { supervisorId } = req.body;
-
-        if (!ObjectId.isValid(studentId) || !ObjectId.isValid(supervisorId)) {
-          return res
-            .status(400)
-            .send({ message: "Invalid studentId or supervisorId" });
-        }
-
-        // Ensure supervisor exists and is a supervisor
-        const supervisor = await userCollection.findOne({
-          _id: new ObjectId(supervisorId),
-          role: "supervisor",
-        });
-        if (!supervisor)
-          return res.status(404).send({ message: "Supervisor not found" });
-
-        // Ensure student exists and is a student
-        const student = await userCollection.findOne({
-          _id: new ObjectId(studentId),
-          role: "student",
-        });
-        if (!student)
-          return res.status(404).send({ message: "Student not found" });
-
-        const prevSupervisorId = student.assignedSupervisor?.toString();
-
-        // 1) Update student's assignedSupervisor
-        await userCollection.updateOne(
-          { _id: new ObjectId(studentId) },
-          { $set: { assignedSupervisor: new ObjectId(supervisorId) } }
-        );
-
-        // 2) Add student to the new supervisor's students array
-        await userCollection.updateOne(
-          { _id: new ObjectId(supervisorId) },
-          { $addToSet: { students: new ObjectId(studentId) } }
-        );
-
-        // 3) If reassigned, remove from old supervisor's students list
-        if (prevSupervisorId && prevSupervisorId !== supervisorId) {
-          await userCollection.updateOne(
-            { _id: new ObjectId(prevSupervisorId) },
-            { $pull: { students: new ObjectId(studentId) } }
-          );
-        }
-
-        res.send({ ok: true });
-      } catch (e) {
-        console.error(e);
-        res.status(500).send({ message: "Internal server error" });
+        const supervisors = await userCollection
+          .find({ role: "supervisor" })
+          .toArray();
+        res.send(supervisors);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to fetch supervisors" });
       }
     });
-
-    // Unassign supervisor from a student
-    app.patch("/users/:studentId/unassign-supervisor", async (req, res) => {
-      try {
-        const { studentId } = req.params;
-
-        if (!ObjectId.isValid(studentId)) {
-          return res.status(400).send({ message: "Invalid studentId" });
-        }
-
-        // Ensure student exists and is a student
-        const student = await userCollection.findOne({
-          _id: new ObjectId(studentId),
-          role: "student",
-        });
-        if (!student) {
-          return res.status(404).send({ message: "Student not found" });
-        }
-
-        const prevSupervisorId = student.assignedSupervisor?.toString();
-
-        // 1) Unset student's assignedSupervisor
-        await userCollection.updateOne(
-          { _id: new ObjectId(studentId) },
-          { $unset: { assignedSupervisor: "" } }
-        );
-
-        // 2) Remove student from previous supervisor's students list
-        if (prevSupervisorId) {
-          await userCollection.updateOne(
-            { _id: new ObjectId(prevSupervisorId), role: "supervisor" },
-            { $pull: { students: new ObjectId(studentId) } }
-          );
-        }
-
-        res.send({ ok: true });
-      } catch (e) {
-        console.error(e);
-        res.status(500).send({ message: "Internal server error" });
-      }
-    });
-
-   
 
     // Post announcement
     app.post("/announcements", async (req, res) => {
@@ -240,6 +146,80 @@ async function run() {
       }
     });
 
+    // Group
+
+    // Get single user by ObjectId
+    app.get("/users/:id", async (req, res) => {
+      const { id } = req.params;
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: "Invalid user id" });
+      }
+      const user = await userCollection.findOne({ _id: new ObjectId(id) });
+      if (!user) {
+        return res.status(404).send({ message: "User not found" });
+      }
+      res.send(user);
+    });
+
+    app.post("/groups", async (req, res) => {
+      try {
+        const { name, adminId, researchInterests } = req.body || {};
+
+        if (typeof name !== "string" || !name.trim()) {
+          return res.status(400).send({ message: "Group name is required" });
+        }
+        if (!ObjectId.isValid(adminId)) {
+          return res.status(400).send({ message: "Invalid adminId" });
+        }
+        if (
+          !Array.isArray(researchInterests) ||
+          researchInterests.length === 0
+        ) {
+          return res
+            .status(400)
+            .send({ message: "At least one research interest is required" });
+        }
+
+        // ensure admin exists and is a student
+        const admin = await userCollection.findOne({
+          _id: new ObjectId(adminId),
+          role: "student",
+        });
+        if (!admin) {
+          return res.status(404).send({ message: "Admin (student) not found" });
+        }
+
+        // normalize interests
+        const normInterests = Array.from(
+          new Set(
+            researchInterests
+              .filter((x) => typeof x === "string")
+              .map((x) => x.trim())
+              .filter(Boolean)
+          )
+        );
+
+        const doc = {
+          name: name.trim(),
+          admin: new ObjectId(adminId),
+          members: [new ObjectId(adminId)], // creator is the first member
+          researchInterests: normInterests,
+          assignedSupervisor: null,
+          proposalsSubmittedTo: [],
+          maxMembers: 5,
+        };
+
+        const result = await groupsCollection.insertOne(doc);
+        const created = await groupsCollection.findOne({
+          _id: result.insertedId,
+        });
+
+        res.status(201).send({ success: true, group: created });
+      } catch (err) {
+        console.error("POST /groups error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
 
     await client.db("admin").command({ ping: 1 });
     console.log("Connected to MongoDB");
