@@ -270,70 +270,40 @@ async function run() {
       }
     });
 
-    app.patch("/groups/:groupId/join", async (req, res) => {
+    app.get("/groups/:id", async (req, res) => {
       try {
-        const { groupId } = req.params;
-        const { studentId } = req.body || {};
+        const groupId = req.params.id;
 
-        if (!ObjectId.isValid(groupId) || !ObjectId.isValid(studentId)) {
-          return res
-            .status(400)
-            .send({ message: "Invalid groupId or studentId" });
+        if (!ObjectId.isValid(groupId)) {
+          return res.status(400).send({ message: "Invalid group ID" });
         }
 
-        const group = await groupsCollection.findOne({
-          _id: new ObjectId(groupId),
-        });
-        if (!group) return res.status(404).send({ message: "Group not found" });
-
-        const studentObjId = new ObjectId(studentId);
-
-        // Ensure student exists & is a student
-        const student = await userCollection.findOne({
-          _id: studentObjId,
-          role: "student",
-        });
-        if (!student)
-          return res.status(404).send({ message: "Student not found" });
-
-        // Block admin from joining their own group
-        if (String(group.admin) === String(studentObjId)) {
-          return res.status(403).send({
-            message: "Group admin cannot join the group they created",
-          });
-        }
-
-        // Already a member?
-        if (group.members.some((m) => String(m) === String(studentObjId))) {
-          return res
-            .status(409)
-            .send({ message: "You are already a member of this group" });
-        }
-
-        // Full?
-        if ((group.members?.length || 0) >= (group.maxMembers || 5)) {
-          return res.status(409).send({ message: "This group is full" });
-        }
-
-        // Add to members
-        const upd = await groupsCollection.updateOne(
+        const group = await groupsCollection.findOne(
           { _id: new ObjectId(groupId) },
-          { $addToSet: { members: studentObjId } }
+          {
+            projection: {
+              name: 1,
+              admin: 1,
+              members: 1,
+              researchInterests: 1,
+              assignedSupervisor: 1,
+              proposalsSubmittedTo: 1,
+              maxMembers: 1,
+            },
+          }
         );
 
-        if (!upd.matchedCount) {
-          return res.status(500).send({ message: "Failed to join group" });
+        if (!group) {
+          return res.status(404).send({ message: "Group not found" });
         }
 
-        const updated = await groupsCollection.findOne({
-          _id: new ObjectId(groupId),
-        });
-        res.send({ success: true, group: updated });
+        res.send(group);
       } catch (err) {
-        console.error("PATCH /groups/:groupId/join error:", err);
+        console.error("GET /groups/:id error:", err);
         res.status(500).send({ message: "Internal server error" });
       }
     });
+
 
     app.get("/groups/by-member/:studentId", async (req, res) => {
       try {
@@ -505,7 +475,7 @@ async function run() {
  // Submit thesis proposal
   app.post("/proposals", async (req, res) => {
     try {
-      const { title, abstract, domain, supervisor, driveLink, studentId, groupId, adminapproved, supervisorapproved } = req.body;
+      const { title, abstract, domain, supervisor, driveLink, studentId, groupId, adminapproved, supervisorapproved,groupName } = req.body;
 
       if (!ObjectId.isValid(studentId) || !ObjectId.isValid(groupId) || !ObjectId.isValid(supervisor)) {
         return res.status(400).send({ message: "Invalid IDs provided" });
@@ -533,6 +503,7 @@ async function run() {
         status: "Pending",
         adminapproved: adminapproved || false,
         supervisorapproved: supervisorapproved || false,
+        groupName: groupName
       };
 
       const result = await proposalsCollection.insertOne(proposal);
@@ -554,6 +525,26 @@ async function run() {
       res.status(500).send({ message: "Internal server error" });
     }
   });
+
+  app.get("/proposals", async (req, res) => {
+  try {
+    const { supervisorId } = req.query;
+
+    if (!supervisorId || !ObjectId.isValid(supervisorId)) {
+      return res.status(400).send({ message: "Invalid or missing supervisorId query parameter" });
+    }
+
+    const proposals = await proposalsCollection
+      .find({ supervisor: new ObjectId(supervisorId) })
+      .toArray();
+
+    res.status(200).send(proposals);
+  } catch (err) {
+    console.error("GET /proposals error:", err);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
 
 
 
