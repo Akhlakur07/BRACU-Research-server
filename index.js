@@ -502,6 +502,62 @@ async function run() {
       }
     });
 
+ // Submit thesis proposal
+  app.post("/proposals", async (req, res) => {
+    try {
+      const { title, abstract, domain, supervisor, driveLink, studentId, groupId, adminapproved, supervisorapproved } = req.body;
+
+      if (!ObjectId.isValid(studentId) || !ObjectId.isValid(groupId) || !ObjectId.isValid(supervisor)) {
+        return res.status(400).send({ message: "Invalid IDs provided" });
+      }
+
+      // Check if group exists and student is the admin
+      const group = await groupsCollection.findOne({ _id: new ObjectId(groupId) });
+      if (!group) {
+        return res.status(404).send({ message: "Group not found" });
+      }
+      if (String(group.admin) !== String(studentId)) {
+        return res.status(403).send({ message: "Only group creators can submit proposals" });
+      }
+
+      // Insert proposal
+      const proposal = {
+        title: title.trim(),
+        abstract: abstract.trim(),
+        domain,
+        supervisor: new ObjectId(supervisor),
+        driveLink,
+        studentId: new ObjectId(studentId),
+        groupId: new ObjectId(groupId),
+        createdAt: new Date(),
+        status: "Pending",
+        adminapproved: adminapproved || false,
+        supervisorapproved: supervisorapproved || false,
+      };
+
+      const result = await proposalsCollection.insertOne(proposal);
+
+      // ✅ Update group's proposalsSubmittedTo
+      await groupsCollection.updateOne(
+        { _id: new ObjectId(groupId) },
+        { $addToSet: { proposalsSubmittedTo: new ObjectId(supervisor) } } // avoids duplicates
+      );
+
+      res.status(201).send({ 
+        success: true, 
+        proposalId: result.insertedId,
+        message: "Proposal submitted and group updated successfully"
+      });
+
+    } catch (err) {
+      console.error("POST /proposals error:", err);
+      res.status(500).send({ message: "Internal server error" });
+    }
+  });
+
+
+
+
     await client.db("admin").command({ ping: 1 });
     console.log("Connected to MongoDB");
   } catch (error) {
