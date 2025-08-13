@@ -4,7 +4,7 @@ const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 const app = express();
-const port = process.env.PORT || 5000;
+const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
@@ -27,6 +27,7 @@ async function run() {
     const announcementsCollection = db.collection("announcements");
     const proposalsCollection = db.collection("proposals");
     const groupsCollection = db.collection("groups");
+    const faqsCollection = db.collection("faqs");
 
     //register user
     app.post("/users", async (req, res) => {
@@ -546,6 +547,42 @@ async function run() {
 });
 
 
+// POST FAQ (Admin only)
+app.post("/faqs", async (req, res) => {
+  try {
+    const { question, answer } = req.body;
+
+    if (typeof question !== "string" || !question.trim()) {
+      return res.status(400).send({ message: "Question is required" });
+    }
+    if (typeof answer !== "string" || !answer.trim()) {
+      return res.status(400).send({ message: "Answer is required" });
+    }
+
+    const faq = {
+      question: question.trim(),
+      answer: answer.trim(),
+      createdAt: new Date(),
+    };
+
+    const result = await faqsCollection.insertOne(faq);
+    res.status(201).send({ success: true, faqId: result.insertedId });
+  } catch (err) {
+    console.error("POST /faqs error:", err);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+// GET all FAQs (Visible to everyone)
+app.get("/faqs", async (req, res) => {
+  try {
+    const faqs = await faqsCollection.find().sort({ createdAt: -1 }).toArray();
+    res.status(200).send(faqs);
+  } catch (err) {
+    console.error("GET /faqs error:", err);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
 
 
 
