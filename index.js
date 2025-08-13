@@ -639,6 +639,71 @@ async function run() {
       }
     });
 
+    // // Supervisor approves/rejects a proposal
+    // app.patch("/proposals/:id/decision", async (req, res) => {
+    //   try {
+    //     const { id } = req.params;
+    //     const { supervisorId, decision } = req.body || {};
+
+    //     if (!ObjectId.isValid(id) || !ObjectId.isValid(supervisorId)) {
+    //       return res.status(400).send({ message: "Invalid id(s)" });
+    //     }
+    //     if (!["approve", "reject"].includes(String(decision))) {
+    //       return res
+    //         .status(400)
+    //         .send({ message: "Decision must be 'approve' or 'reject'" });
+    //     }
+
+    //     const proposal = await proposalsCollection.findOne({
+    //       _id: new ObjectId(id),
+    //     });
+    //     if (!proposal)
+    //       return res.status(404).send({ message: "Proposal not found" });
+
+    //     // Only the assigned supervisor can act
+    //     if (String(proposal.supervisor) !== String(supervisorId)) {
+    //       return res
+    //         .status(403)
+    //         .send({ message: "Not authorized to decide this proposal" });
+    //     }
+
+    //     // Only pending can be decided
+    //     if (proposal.status !== "Pending") {
+    //       return res
+    //         .status(409)
+    //         .send({ message: "Proposal has already been decided" });
+    //     }
+
+    //     let newFields = {
+    //       status: decision === "approve" ? "Approved" : "Rejected",
+    //       supervisorapproved: decision === "approve",
+    //       decidedAt: new Date(),
+    //     };
+
+    //     // If approved, mark group.assignedSupervisor = this supervisor
+    //     if (decision === "approve" && ObjectId.isValid(proposal.groupId)) {
+    //       await groupsCollection.updateOne(
+    //         { _id: new ObjectId(proposal.groupId) },
+    //         { $set: { assignedSupervisor: new ObjectId(supervisorId) } }
+    //       );
+    //     }
+
+    //     await proposalsCollection.updateOne(
+    //       { _id: new ObjectId(id) },
+    //       { $set: newFields }
+    //     );
+
+    //     const updated = await proposalsCollection.findOne({
+    //       _id: new ObjectId(id),
+    //     });
+    //     res.send({ success: true, proposal: updated });
+    //   } catch (err) {
+    //     console.error("PATCH /proposals/:id/decision error:", err);
+    //     res.status(500).send({ message: "Internal server error" });
+    //   }
+    // });
+
+
     // Supervisor approves/rejects a proposal
     app.patch("/proposals/:id/decision", async (req, res) => {
       try {
@@ -688,10 +753,44 @@ async function run() {
           );
         }
 
+        // Update proposal status
         await proposalsCollection.updateOne(
           { _id: new ObjectId(id) },
           { $set: newFields }
         );
+
+        // ========================
+        //   📢 Send Notifications
+        // ========================
+        if (ObjectId.isValid(proposal.groupId)) {
+          const group = await groupsCollection.findOne({
+            _id: new ObjectId(proposal.groupId),
+          });
+
+          if (group?.members?.length > 0) {
+            const supervisor = await userCollection.findOne({
+              _id: new ObjectId(supervisorId),
+            });
+
+            const notification = {
+              message:
+                decision === "approve"
+                  ? `Your thesis proposal "${proposal.title}" has been approved by ${supervisor?.name || "Supervisor"}.`
+                  : `Your thesis proposal "${proposal.title}" has been rejected by ${supervisor?.name || "Supervisor"}.`,
+              date: new Date(),
+              link: `/proposals/${proposal._id}`, // clicking takes to proposal details
+            };
+
+            await userCollection.updateMany(
+              { _id: { $in: group.members.map(m => new ObjectId(m)) } },
+              {
+                $push: { notifications: notification },
+                $set: { isSeen: false }
+              }
+            );
+          }
+        }
+        // ========================
 
         const updated = await proposalsCollection.findOne({
           _id: new ObjectId(id),
@@ -702,6 +801,7 @@ async function run() {
         res.status(500).send({ message: "Internal server error" });
       }
     });
+
 
     await client.db("admin").command({ ping: 1 });
     console.log("Connected to MongoDB");
