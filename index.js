@@ -305,7 +305,6 @@ async function run() {
       }
     });
 
-
     app.get("/groups/by-member/:studentId", async (req, res) => {
       try {
         const { studentId } = req.params;
@@ -437,11 +436,9 @@ async function run() {
         }
 
         if (String(group.admin) === String(studentObjId)) {
-          return res
-            .status(403)
-            .send({
-              message: "Group admin cannot join the group they created",
-            });
+          return res.status(403).send({
+            message: "Group admin cannot join the group they created",
+          });
         }
 
         if (group.members.some((m) => String(m) === String(studentObjId))) {
@@ -473,118 +470,204 @@ async function run() {
       }
     });
 
- // Submit thesis proposal
-  app.post("/proposals", async (req, res) => {
-    try {
-      const { title, abstract, domain, supervisor, driveLink, studentId, groupId, adminapproved, supervisorapproved,groupName } = req.body;
+    // Submit thesis proposal
+    app.post("/proposals", async (req, res) => {
+      try {
+        const {
+          title,
+          abstract,
+          domain,
+          supervisor,
+          driveLink,
+          studentId,
+          groupId,
+          adminapproved,
+          supervisorapproved,
+          groupName,
+        } = req.body;
 
-      if (!ObjectId.isValid(studentId) || !ObjectId.isValid(groupId) || !ObjectId.isValid(supervisor)) {
-        return res.status(400).send({ message: "Invalid IDs provided" });
+        if (
+          !ObjectId.isValid(studentId) ||
+          !ObjectId.isValid(groupId) ||
+          !ObjectId.isValid(supervisor)
+        ) {
+          return res.status(400).send({ message: "Invalid IDs provided" });
+        }
+
+        // Check if group exists and student is the admin
+        const group = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+        });
+        if (!group) {
+          return res.status(404).send({ message: "Group not found" });
+        }
+        if (String(group.admin) !== String(studentId)) {
+          return res
+            .status(403)
+            .send({ message: "Only group creators can submit proposals" });
+        }
+
+        // Insert proposal
+        const proposal = {
+          title: title.trim(),
+          abstract: abstract.trim(),
+          domain,
+          supervisor: new ObjectId(supervisor),
+          driveLink,
+          studentId: new ObjectId(studentId),
+          groupId: new ObjectId(groupId),
+          createdAt: new Date(),
+          status: "Pending",
+          adminapproved: adminapproved || false,
+          supervisorapproved: supervisorapproved || false,
+          groupName: groupName,
+        };
+
+        const result = await proposalsCollection.insertOne(proposal);
+
+        // ✅ Update group's proposalsSubmittedTo
+        await groupsCollection.updateOne(
+          { _id: new ObjectId(groupId) },
+          { $addToSet: { proposalsSubmittedTo: new ObjectId(supervisor) } } // avoids duplicates
+        );
+
+        res.status(201).send({
+          success: true,
+          proposalId: result.insertedId,
+          message: "Proposal submitted and group updated successfully",
+        });
+      } catch (err) {
+        console.error("POST /proposals error:", err);
+        res.status(500).send({ message: "Internal server error" });
       }
+    });
 
-      // Check if group exists and student is the admin
-      const group = await groupsCollection.findOne({ _id: new ObjectId(groupId) });
-      if (!group) {
-        return res.status(404).send({ message: "Group not found" });
+    app.get("/proposals", async (req, res) => {
+      try {
+        const { supervisorId } = req.query;
+
+        if (!supervisorId || !ObjectId.isValid(supervisorId)) {
+          return res
+            .status(400)
+            .send({
+              message: "Invalid or missing supervisorId query parameter",
+            });
+        }
+
+        const proposals = await proposalsCollection
+          .find({ supervisor: new ObjectId(supervisorId) })
+          .toArray();
+
+        res.status(200).send(proposals);
+      } catch (err) {
+        console.error("GET /proposals error:", err);
+        res.status(500).send({ message: "Internal server error" });
       }
-      if (String(group.admin) !== String(studentId)) {
-        return res.status(403).send({ message: "Only group creators can submit proposals" });
+    });
+
+    // POST FAQ (Admin only)
+    app.post("/faqs", async (req, res) => {
+      try {
+        const { question, answer } = req.body;
+
+        if (typeof question !== "string" || !question.trim()) {
+          return res.status(400).send({ message: "Question is required" });
+        }
+        if (typeof answer !== "string" || !answer.trim()) {
+          return res.status(400).send({ message: "Answer is required" });
+        }
+
+        const faq = {
+          question: question.trim(),
+          answer: answer.trim(),
+          createdAt: new Date(),
+        };
+
+        const result = await faqsCollection.insertOne(faq);
+        res.status(201).send({ success: true, faqId: result.insertedId });
+      } catch (err) {
+        console.error("POST /faqs error:", err);
+        res.status(500).send({ message: "Internal server error" });
       }
+    });
 
-      // Insert proposal
-      const proposal = {
-        title: title.trim(),
-        abstract: abstract.trim(),
-        domain,
-        supervisor: new ObjectId(supervisor),
-        driveLink,
-        studentId: new ObjectId(studentId),
-        groupId: new ObjectId(groupId),
-        createdAt: new Date(),
-        status: "Pending",
-        adminapproved: adminapproved || false,
-        supervisorapproved: supervisorapproved || false,
-        groupName: groupName
-      };
+    // GET all FAQs (Visible to everyone)
+    app.get("/faqs", async (req, res) => {
+      try {
+        const faqs = await faqsCollection
+          .find()
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.status(200).send(faqs);
+      } catch (err) {
+        console.error("GET /faqs error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
 
-      const result = await proposalsCollection.insertOne(proposal);
+    // Supervisor approves/rejects a proposal
+    app.patch("/proposals/:id/decision", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { supervisorId, decision } = req.body || {};
 
-      // ✅ Update group's proposalsSubmittedTo
-      await groupsCollection.updateOne(
-        { _id: new ObjectId(groupId) },
-        { $addToSet: { proposalsSubmittedTo: new ObjectId(supervisor) } } // avoids duplicates
-      );
+        if (!ObjectId.isValid(id) || !ObjectId.isValid(supervisorId)) {
+          return res.status(400).send({ message: "Invalid id(s)" });
+        }
+        if (!["approve", "reject"].includes(String(decision))) {
+          return res
+            .status(400)
+            .send({ message: "Decision must be 'approve' or 'reject'" });
+        }
 
-      res.status(201).send({ 
-        success: true, 
-        proposalId: result.insertedId,
-        message: "Proposal submitted and group updated successfully"
-      });
+        const proposal = await proposalsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (!proposal)
+          return res.status(404).send({ message: "Proposal not found" });
 
-    } catch (err) {
-      console.error("POST /proposals error:", err);
-      res.status(500).send({ message: "Internal server error" });
-    }
-  });
+        // Only the assigned supervisor can act
+        if (String(proposal.supervisor) !== String(supervisorId)) {
+          return res
+            .status(403)
+            .send({ message: "Not authorized to decide this proposal" });
+        }
 
-  app.get("/proposals", async (req, res) => {
-  try {
-    const { supervisorId } = req.query;
+        // Only pending can be decided
+        if (proposal.status !== "Pending") {
+          return res
+            .status(409)
+            .send({ message: "Proposal has already been decided" });
+        }
 
-    if (!supervisorId || !ObjectId.isValid(supervisorId)) {
-      return res.status(400).send({ message: "Invalid or missing supervisorId query parameter" });
-    }
+        let newFields = {
+          status: decision === "approve" ? "Approved" : "Rejected",
+          supervisorapproved: decision === "approve",
+          decidedAt: new Date(),
+        };
 
-    const proposals = await proposalsCollection
-      .find({ supervisor: new ObjectId(supervisorId) })
-      .toArray();
+        // If approved, mark group.assignedSupervisor = this supervisor
+        if (decision === "approve" && ObjectId.isValid(proposal.groupId)) {
+          await groupsCollection.updateOne(
+            { _id: new ObjectId(proposal.groupId) },
+            { $set: { assignedSupervisor: new ObjectId(supervisorId) } }
+          );
+        }
 
-    res.status(200).send(proposals);
-  } catch (err) {
-    console.error("GET /proposals error:", err);
-    res.status(500).send({ message: "Internal server error" });
-  }
-});
+        await proposalsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: newFields }
+        );
 
-
-// POST FAQ (Admin only)
-app.post("/faqs", async (req, res) => {
-  try {
-    const { question, answer } = req.body;
-
-    if (typeof question !== "string" || !question.trim()) {
-      return res.status(400).send({ message: "Question is required" });
-    }
-    if (typeof answer !== "string" || !answer.trim()) {
-      return res.status(400).send({ message: "Answer is required" });
-    }
-
-    const faq = {
-      question: question.trim(),
-      answer: answer.trim(),
-      createdAt: new Date(),
-    };
-
-    const result = await faqsCollection.insertOne(faq);
-    res.status(201).send({ success: true, faqId: result.insertedId });
-  } catch (err) {
-    console.error("POST /faqs error:", err);
-    res.status(500).send({ message: "Internal server error" });
-  }
-});
-
-// GET all FAQs (Visible to everyone)
-app.get("/faqs", async (req, res) => {
-  try {
-    const faqs = await faqsCollection.find().sort({ createdAt: -1 }).toArray();
-    res.status(200).send(faqs);
-  } catch (err) {
-    console.error("GET /faqs error:", err);
-    res.status(500).send({ message: "Internal server error" });
-  }
-});
-
-
+        const updated = await proposalsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        res.send({ success: true, proposal: updated });
+      } catch (err) {
+        console.error("PATCH /proposals/:id/decision error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
 
     await client.db("admin").command({ ping: 1 });
     console.log("Connected to MongoDB");
