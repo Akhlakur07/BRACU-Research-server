@@ -587,7 +587,7 @@ async function run() {
 
     app.get("/proposals", async (req, res) => {
       try {
-        const { supervisorId, studentId, groupId } = req.query;
+        const { supervisorId, studentId, groupId, status } = req.query;
         const filter = {};
 
         if (supervisorId) {
@@ -611,11 +611,48 @@ async function run() {
           filter.groupId = new ObjectId(groupId);
         }
 
-        if (!supervisorId && !studentId && !groupId) {
+        if (status) {
+          // allow Pending / Approved / Rejected
+          filter.status = String(status);
+        }
+
+        if (!supervisorId && !studentId && !groupId && !status) {
           return res.status(400).send({ message: "Missing query parameter" });
         }
 
-        const proposals = await proposalsCollection.find(filter).toArray();
+        // Populate supervisor info (name/email) via $lookup
+        const proposals = await proposalsCollection
+          .aggregate([
+            { $match: filter },
+            { $sort: { createdAt: -1 } },
+            {
+              $lookup: {
+                from: "users",
+                localField: "supervisor",
+                foreignField: "_id",
+                as: "supervisorInfo",
+              },
+            },
+            {
+              $addFields: {
+                supervisorName: {
+                  $ifNull: [
+                    { $arrayElemAt: ["$supervisorInfo.name", 0] },
+                    null,
+                  ],
+                },
+                supervisorEmail: {
+                  $ifNull: [
+                    { $arrayElemAt: ["$supervisorInfo.email", 0] },
+                    null,
+                  ],
+                },
+              },
+            },
+            { $project: { supervisorInfo: 0 } },
+          ])
+          .toArray();
+
         res.status(200).send(proposals);
       } catch (err) {
         console.error("GET /proposals error:", err);
@@ -766,6 +803,174 @@ async function run() {
         res.send({ success: true, proposal: updated });
       } catch (err) {
         console.error("PATCH /proposals/:id/decision error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // ADMIN assigns supervisor to the proposal's group
+    app.patch("/admin/assign-supervisor", async (req, res) => {
+      try {
+        const { proposalId } = req.body || {};
+        if (!ObjectId.isValid(proposalId)) {
+          return res.status(400).send({ message: "Invalid proposalId" });
+        }
+
+        // Load proposal
+        const proposal = await proposalsCollection.findOne({
+          _id: new ObjectId(proposalId),
+        });
+        if (!proposal) {
+          return res.status(404).send({ message: "Proposal not found" });
+        }
+
+        // Load group
+        const group = await groupsCollection.findOne({
+          _id: new ObjectId(proposal.groupId),
+        });
+        if (!group) {
+          return res.status(404).send({ message: "Group not found" });
+        }
+
+        // Already assigned? (idempotency guard)
+        const alreadyAssigned =
+          group.assignedSupervisor &&
+          String(group.assignedSupervisor) === String(proposal.supervisor);
+
+        // 1) Assign supervisor to the group
+        await groupsCollection.updateOne(
+          { _id: new ObjectId(proposal.groupId) },
+          { $set: { assignedSupervisor: new ObjectId(proposal.supervisor) } }
+        );
+
+        // 2) Mark this proposal as Approved (+ adminapproved flag)
+        await proposalsCollection.updateOne(
+          { _id: new ObjectId(proposalId) },
+          {
+            $set: {
+              status: "Approved",
+              supervisorapproved: true,
+              adminapproved: true,
+              decidedAt: new Date(),
+            },
+          }
+        );
+
+        // 3) Remove all other proposals by this group (keep the approved one)
+        await proposalsCollection.deleteMany({
+          groupId: new ObjectId(proposal.groupId),
+          _id: { $ne: new ObjectId(proposalId) },
+        });
+
+        // 4) Notifications
+        const supervisorUser = await userCollection.findOne({
+          _id: new ObjectId(proposal.supervisor),
+        });
+
+        const supName =
+          supervisorUser?.name || supervisorUser?.email || "Supervisor";
+        const groupMemberIds = (group.members || []).map(
+          (m) => new ObjectId(m)
+        );
+
+        // Notify group members
+        await pushNotificationsToUsers(groupMemberIds, {
+          message: `Admin assigned ${supName} as your supervisor for "${proposal.title}".`,
+          date: new Date(),
+          link: `/proposals/${proposal._id}`,
+        });
+
+        // Notify the supervisor
+        await pushNotificationsToUsers([proposal.supervisor], {
+          message: `You have been assigned to supervise group "${group.name}" (proposal: "${proposal.title}").`,
+          date: new Date(),
+          link: `/supervisor-dashboard`,
+        });
+
+        res.send({
+          success: true,
+          assigned: true,
+          alreadyAssigned,
+          proposalId,
+          groupId: proposal.groupId,
+          supervisorId: proposal.supervisor,
+        });
+      } catch (err) {
+        console.error("PATCH /admin/assign-supervisor error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // ADMIN rejects a proposal (does NOT unassign anything)
+    app.patch("/admin/reject-proposal", async (req, res) => {
+      try {
+        const { proposalId, reason } = req.body || {};
+        if (!ObjectId.isValid(proposalId)) {
+          return res.status(400).send({ message: "Invalid proposalId" });
+        }
+
+        const proposal = await proposalsCollection.findOne({
+          _id: new ObjectId(proposalId),
+        });
+        if (!proposal) {
+          return res.status(404).send({ message: "Proposal not found" });
+        }
+
+        // Only change if still pending (optional; remove check if you want to force)
+        if (proposal.status !== "Pending") {
+          return res
+            .status(409)
+            .send({ message: "Proposal has already been decided" });
+        }
+
+        await proposalsCollection.updateOne(
+          { _id: new ObjectId(proposalId) },
+          {
+            $set: {
+              status: "Rejected",
+              supervisorapproved: false,
+              adminapproved: false,
+              decidedAt: new Date(),
+              rejectedReason: typeof reason === "string" ? reason : undefined,
+            },
+          }
+        );
+
+        // Notifications
+        const group = await groupsCollection.findOne({
+          _id: new ObjectId(proposal.groupId),
+        });
+
+        const supervisorUser = await userCollection.findOne({
+          _id: new ObjectId(proposal.supervisor),
+        });
+
+        const supName =
+          supervisorUser?.name || supervisorUser?.email || "Supervisor";
+        const groupMemberIds = (group?.members || []).map(
+          (m) => new ObjectId(m)
+        );
+
+        // Group members
+        await pushNotificationsToUsers(groupMemberIds, {
+          message: `Admin rejected your proposal "${proposal.title}"${
+            reason ? ` — Reason: ${reason}` : ""
+          }.`,
+          date: new Date(),
+          link: `/proposals/${proposal._id}`,
+        });
+
+        // Supervisor
+        await pushNotificationsToUsers([proposal.supervisor], {
+          message: `Admin rejected the proposal "${
+            proposal.title
+          }" that was submitted to you by group "${group?.name || "Unknown"}".`,
+          date: new Date(),
+          link: `/supervisor-dashboard`,
+        });
+
+        res.send({ success: true, rejected: true, proposalId });
+      } catch (err) {
+        console.error("PATCH /admin/reject-proposal error:", err);
         res.status(500).send({ message: "Internal server error" });
       }
     });
