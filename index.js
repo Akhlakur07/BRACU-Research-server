@@ -31,7 +31,11 @@ async function run() {
 
     //register user
     app.post("/users", async (req, res) => {
-      const user = req.body;
+      const user = {
+        ...req.body,
+        notifications: [],
+        isSeen: true // default true so no red dot until something new comes
+      };
       const result = await userCollection.insertOne(user);
       res.send(result);
     });
@@ -120,6 +124,20 @@ async function run() {
         res.status(500).send({ message: "Failed to fetch supervisors" });
       }
     });
+    //
+    app.put("/users/:id/notifications/seen", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { isSeen: true } }
+        );
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to update notifications" });
+      }
+    });
 
     // Post announcement
     app.post("/announcements", async (req, res) => {
@@ -127,6 +145,22 @@ async function run() {
         const announcement = req.body;
         announcement.createdAt = new Date();
         const result = await announcementsCollection.insertOne(announcement);
+
+        // Push notification to all students and supervisors
+        const notification = {
+          message: `New announcement: ${announcement.title}`,
+          date: new Date(),
+          link: "/view-announcement"
+        };
+
+        await userCollection.updateMany(
+          { role: { $in: ["student", "supervisor"] } },
+          {
+            $push: { notifications: notification },
+            $set: { isSeen: false }
+          }
+        );
+
         res.status(201).send(result);
       } catch (err) {
         console.error(err);
