@@ -112,6 +112,89 @@ async function run() {
       }
       res.send({ message: "User deleted" });
     });
+
+  // Get student profile (now using ID parameter)
+  app.get("/profile/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid ID format" });
+      }
+
+      const student = await userCollection.findOne(
+        { _id: new ObjectId(id) },
+        { projection: { password: 0 } }
+      );
+      
+      if (!student) return res.status(404).json({ message: "Profile not found" });
+
+      res.json(student);
+    } catch (err) {
+      console.error("Profile fetch error:", err);
+      res.status(500).json({ message: "Error fetching profile" });
+    }
+  });
+
+  // Update student profile (now using ID parameter)
+  app.put("/profile/update/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid ID format" });
+      }
+
+      const allowedFields = [
+        'name',
+        'studentId',
+        'department',
+        'phone',
+        'cgpa',
+        'creditsCompleted',
+        'researchInterest',
+        'photoUrl',
+      ];
+      const updateData = {};
+      
+      for (const field of allowedFields) {
+        if (req.body[field] !== undefined) {
+          updateData[field] = req.body[field];
+        }
+      }
+
+      if (updateData.name && updateData.name.trim().length < 2) {
+        return res.status(400).json({ message: "Name must be at least 2 characters" });
+      }
+
+      if (updateData.cgpa && (updateData.cgpa < 0 || updateData.cgpa > 4)) {
+        return res.status(400).json({ message: "CGPA must be between 0 and 4" });
+      }
+
+      if (updateData.creditsCompleted && updateData.creditsCompleted < 0) {
+        return res.status(400).json({ message: "Credits must be a positive number" });
+      }
+
+      const result = await userCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: updateData }
+      );
+
+      if (result.matchedCount === 0) {
+        return res.status(404).json({ message: "Profile not found" });
+      }
+
+      const updated = await userCollection.findOne(
+        { _id: new ObjectId(id) },
+        { projection: { password: 0 } }
+      );
+      
+      res.json(updated);
+    } catch (err) {
+      console.error("Profile update error:", err);
+      res.status(500).json({ message: "Error updating profile" });
+    }
+  });
     // Get only supervisors
     app.get("/supervisors", async (req, res) => {
       try {
@@ -759,7 +842,7 @@ async function run() {
           { $set: newFields }
         );
 
-        // 📢 Send Notifications to group members
+        //  Send Notifications to group members
         if (ObjectId.isValid(proposal.groupId)) {
           const group = await groupsCollection.findOne({
             _id: new ObjectId(proposal.groupId),
