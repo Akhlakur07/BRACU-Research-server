@@ -35,6 +35,7 @@ async function run() {
         ...req.body,
         notifications: [],
         isSeen: true, // default true so no red dot until something new comes
+        joinRequests: [],
       };
       const result = await userCollection.insertOne(user);
       res.send(result);
@@ -113,88 +114,95 @@ async function run() {
       res.send({ message: "User deleted" });
     });
 
-  // Get student profile (now using ID parameter)
-  app.get("/profile/:id", async (req, res) => {
-    try {
-      const { id } = req.params;
-      
-      if (!ObjectId.isValid(id)) {
-        return res.status(400).json({ message: "Invalid ID format" });
-      }
+    // Get student profile (now using ID parameter)
+    app.get("/profile/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
 
-      const student = await userCollection.findOne(
-        { _id: new ObjectId(id) },
-        { projection: { password: 0 } }
-      );
-      
-      if (!student) return res.status(404).json({ message: "Profile not found" });
-
-      res.json(student);
-    } catch (err) {
-      console.error("Profile fetch error:", err);
-      res.status(500).json({ message: "Error fetching profile" });
-    }
-  });
-
-  // Update student profile (now using ID parameter)
-  app.put("/profile/update/:id", async (req, res) => {
-    try {
-      const { id } = req.params;
-
-      if (!ObjectId.isValid(id)) {
-        return res.status(400).json({ message: "Invalid ID format" });
-      }
-
-      const allowedFields = [
-        'name',
-        'studentId',
-        'department',
-        'phone',
-        'cgpa',
-        'creditsCompleted',
-        'researchInterest',
-        'photoUrl',
-      ];
-      const updateData = {};
-      
-      for (const field of allowedFields) {
-        if (req.body[field] !== undefined) {
-          updateData[field] = req.body[field];
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ message: "Invalid ID format" });
         }
+
+        const student = await userCollection.findOne(
+          { _id: new ObjectId(id) },
+          { projection: { password: 0 } }
+        );
+
+        if (!student)
+          return res.status(404).json({ message: "Profile not found" });
+
+        res.json(student);
+      } catch (err) {
+        console.error("Profile fetch error:", err);
+        res.status(500).json({ message: "Error fetching profile" });
       }
+    });
 
-      if (updateData.name && updateData.name.trim().length < 2) {
-        return res.status(400).json({ message: "Name must be at least 2 characters" });
+    // Update student profile (now using ID parameter)
+    app.put("/profile/update/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ message: "Invalid ID format" });
+        }
+
+        const allowedFields = [
+          "name",
+          "studentId",
+          "department",
+          "phone",
+          "cgpa",
+          "creditsCompleted",
+          "researchInterest",
+          "photoUrl",
+        ];
+        const updateData = {};
+
+        for (const field of allowedFields) {
+          if (req.body[field] !== undefined) {
+            updateData[field] = req.body[field];
+          }
+        }
+
+        if (updateData.name && updateData.name.trim().length < 2) {
+          return res
+            .status(400)
+            .json({ message: "Name must be at least 2 characters" });
+        }
+
+        if (updateData.cgpa && (updateData.cgpa < 0 || updateData.cgpa > 4)) {
+          return res
+            .status(400)
+            .json({ message: "CGPA must be between 0 and 4" });
+        }
+
+        if (updateData.creditsCompleted && updateData.creditsCompleted < 0) {
+          return res
+            .status(400)
+            .json({ message: "Credits must be a positive number" });
+        }
+
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ message: "Profile not found" });
+        }
+
+        const updated = await userCollection.findOne(
+          { _id: new ObjectId(id) },
+          { projection: { password: 0 } }
+        );
+
+        res.json(updated);
+      } catch (err) {
+        console.error("Profile update error:", err);
+        res.status(500).json({ message: "Error updating profile" });
       }
-
-      if (updateData.cgpa && (updateData.cgpa < 0 || updateData.cgpa > 4)) {
-        return res.status(400).json({ message: "CGPA must be between 0 and 4" });
-      }
-
-      if (updateData.creditsCompleted && updateData.creditsCompleted < 0) {
-        return res.status(400).json({ message: "Credits must be a positive number" });
-      }
-
-      const result = await userCollection.updateOne(
-        { _id: new ObjectId(id) },
-        { $set: updateData }
-      );
-
-      if (result.matchedCount === 0) {
-        return res.status(404).json({ message: "Profile not found" });
-      }
-
-      const updated = await userCollection.findOne(
-        { _id: new ObjectId(id) },
-        { projection: { password: 0 } }
-      );
-      
-      res.json(updated);
-    } catch (err) {
-      console.error("Profile update error:", err);
-      res.status(500).json({ message: "Error updating profile" });
-    }
-  });
+    });
     // Get only supervisors
     app.get("/supervisors", async (req, res) => {
       try {
@@ -230,7 +238,7 @@ async function run() {
         console.error("Error fetching supervisor:", err);
         res.status(500).json({ message: "Error fetching supervisor" });
       }
-});
+    });
     // Update supervisor profile
     app.put("/supervisor/update/:id", async (req, res) => {
       try {
@@ -258,7 +266,9 @@ async function run() {
 
         // Basic validations
         if (updateData.name && updateData.name.trim().length < 2) {
-          return res.status(400).json({ message: "Name must be at least 2 characters" });
+          return res
+            .status(400)
+            .json({ message: "Name must be at least 2 characters" });
         }
 
         const result = await userCollection.updateOne(
@@ -267,7 +277,9 @@ async function run() {
         );
 
         if (result.matchedCount === 0) {
-          return res.status(404).json({ message: "Supervisor profile not found" });
+          return res
+            .status(404)
+            .json({ message: "Supervisor profile not found" });
         }
 
         const updatedSupervisor = await userCollection.findOne(
@@ -1127,6 +1139,232 @@ async function run() {
         res.send({ success: true, rejected: true, proposalId });
       } catch (err) {
         console.error("PATCH /admin/reject-proposal error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // Reusable helper to push notifications and flip isSeen=false
+    async function pushNotificationsToUsers(userIds = [], notif = {}) {
+      try {
+        const ids = (userIds || [])
+          .map((id) => (ObjectId.isValid(id) ? new ObjectId(id) : null))
+          .filter(Boolean);
+        if (ids.length === 0) return;
+
+        const notification = {
+          message: String(notif.message || ""),
+          date: notif.date ? new Date(notif.date) : new Date(),
+          link: String(notif.link || ""),
+        };
+
+        await userCollection.updateMany(
+          { _id: { $in: ids } },
+          { $push: { notifications: notification }, $set: { isSeen: false } }
+        );
+      } catch (err) {
+        console.error("pushNotificationsToUsers error:", err);
+      }
+    }
+
+    // GET /users/by-studentId/:studentId
+    // Returns the student doc (without password) by their "studentId" field
+    app.get("/users/by-studentId/:studentId", async (req, res) => {
+      try {
+        const { studentId } = req.params;
+        if (!studentId || typeof studentId !== "string") {
+          return res.status(400).json({ message: "studentId is required" });
+        }
+
+        const student = await userCollection.findOne(
+          { studentId: studentId.trim(), role: "student" },
+          { projection: { password: 0 } }
+        );
+
+        if (!student) {
+          return res.status(404).json({ message: "Student not found" });
+        }
+
+        res.json(student);
+      } catch (err) {
+        console.error("GET /users/by-studentId error:", err);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    });
+
+    // GET /groups/check-membership/:userId
+    // Returns { inGroup: boolean }
+    app.get("/groups/check-membership/:userId", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        if (!ObjectId.isValid(userId)) {
+          return res.status(400).json({ message: "Invalid userId" });
+        }
+        const uid = new ObjectId(userId);
+
+        const found = await groupsCollection.findOne({
+          $or: [{ admin: uid }, { members: uid }],
+        });
+
+        res.json({ inGroup: Boolean(found) });
+      } catch (err) {
+        console.error("GET /groups/check-membership error:", err);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    });
+
+    // POST /groups/:groupId/invite
+    // Body: { studentId: "<Mongo _id of the student to invite>" }
+    // Sends a notification to that student IF they aren't in any group yet.
+    // POST /groups/:groupId/invite
+    // Body: { studentId: "<Mongo _id of the student>" }
+    app.post("/groups/:groupId/invite", async (req, res) => {
+      try {
+        const { groupId } = req.params;
+        const { studentId } = req.body || {};
+
+        if (!ObjectId.isValid(groupId) || !ObjectId.isValid(studentId)) {
+          return res
+            .status(400)
+            .json({ message: "Invalid groupId or studentId" });
+        }
+
+        // Load group & student
+        const group = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+        });
+        if (!group) return res.status(404).json({ message: "Group not found" });
+
+        const student = await userCollection.findOne(
+          { _id: new ObjectId(studentId), role: "student" },
+          { projection: { password: 0 } }
+        );
+        if (!student)
+          return res.status(404).json({ message: "Student not found" });
+
+        // Group full?
+        const maxMembers = group.maxMembers || 5;
+        const currentMembers = Array.isArray(group.members)
+          ? group.members.length
+          : 0;
+        if (currentMembers >= maxMembers) {
+          return res.status(409).json({ message: "Group is already full" });
+        }
+
+        // Student already in any group?
+        const alreadyInGroup = await groupsCollection.findOne({
+          $or: [
+            { admin: new ObjectId(studentId) },
+            { members: new ObjectId(studentId) },
+          ],
+        });
+        if (alreadyInGroup) {
+          return res
+            .status(409)
+            .json({ message: "Student already belongs to a group" });
+        }
+
+        // Prevent inviting admin himself
+        if (String(group.admin) === String(studentId)) {
+          return res
+            .status(400)
+            .json({ message: "Cannot invite the group admin" });
+        }
+
+        // Avoid duplicate pending request from same group
+        const pendingExists = await userCollection.findOne({
+          _id: new ObjectId(studentId),
+          "joinRequests.groupId": new ObjectId(groupId),
+          "joinRequests.status": "pending",
+        });
+        if (pendingExists) {
+          return res
+            .status(409)
+            .json({ message: "An invite from this group is already pending" });
+        }
+
+        // Prepare join request object
+        const adminUser = await userCollection.findOne(
+          { _id: new ObjectId(group.admin) },
+          { projection: { name: 1, email: 1 } }
+        );
+
+        const joinRequest = {
+          _id: new ObjectId(), // unique id for this request
+          groupId: new ObjectId(groupId),
+          groupName: group.name || "Unnamed Group",
+          invitedBy: new ObjectId(group.admin),
+          invitedByName: adminUser?.name || adminUser?.email || "Group Admin",
+          date: new Date(),
+          status: "pending", // pending | accepted | declined (future use)
+        };
+
+        // Push join request to student's user doc
+        await userCollection.updateOne(
+          { _id: new ObjectId(studentId) },
+          {
+            $push: { joinRequests: joinRequest },
+            $set: { isSeen: false },
+          }
+        );
+
+        // Notifications
+        await pushNotificationsToUsers([student._id], {
+          message: `You’ve been invited to join group "${group.name}".`,
+          link: `/find-group/${student._id}`,
+        });
+
+        await pushNotificationsToUsers([group.admin], {
+          message: `Invite sent to ${
+            student.name || student.email || "a student"
+          } to join "${group.name}".`,
+          link: `/find-group/${group.admin}`,
+        });
+
+        res.json({ success: true, invited: true, joinRequest });
+      } catch (err) {
+        console.error("POST /groups/:groupId/invite error:", err);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    });
+
+    // GET /users/:id/join-requests
+    app.get("/users/:id/join-requests", async (req, res) => {
+      try {
+        const { id } = req.params;
+        if (!ObjectId.isValid(id))
+          return res.status(400).json({ message: "Invalid id" });
+
+        const user = await userCollection.findOne(
+          { _id: new ObjectId(id) },
+          { projection: { joinRequests: 1, _id: 0 } }
+        );
+
+        res.json(user?.joinRequests || []);
+      } catch (err) {
+        console.error("GET /users/:id/join-requests error:", err);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    });
+
+    // Clear ALL join requests for a student
+    app.patch("/users/:id/join-requests/clear", async (req, res) => {
+      try {
+        const { id } = req.params;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid user id" });
+        }
+
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { joinRequests: [] } }
+        );
+
+        if (!result.matchedCount) {
+          return res.status(404).send({ message: "User not found" });
+        }
+        res.send({ success: true });
+      } catch (err) {
+        console.error("PATCH /users/:id/join-requests/clear error:", err);
         res.status(500).send({ message: "Internal server error" });
       }
     });
