@@ -662,6 +662,22 @@ async function run() {
           return res.status(500).send({ message: "Failed to join group" });
         }
 
+        // Remove this student's pending join requests across ALL groups
+        await groupsCollection.updateMany(
+          {},
+          { $pull: { pendingJoinRequests: { studentId: studentObjId } } }
+        );
+
+        // Clear any outstanding invites to the student and invite records in groups
+        await userCollection.updateOne(
+          { _id: studentObjId },
+          { $set: { joinRequests: [] } }
+        );
+        await groupsCollection.updateMany(
+          {},
+          { $pull: { pendingInvites: { studentId: studentObjId } } }
+        );
+
         const updated = await groupsCollection.findOne({
           _id: new ObjectId(groupId),
         });
@@ -1327,6 +1343,182 @@ async function run() {
       }
     });
 
+    // REJECT a specific invite
+    app.patch("/groups/invite/:requestId/reject", async (req, res) => {
+      try {
+        const { requestId } = req.params;
+        const { studentId, groupId } = req.body || {};
+
+        if (!ObjectId.isValid(requestId) || !ObjectId.isValid(studentId)) {
+          return res.status(400).json({ message: "Invalid id(s)" });
+        }
+        if (groupId && !ObjectId.isValid(groupId)) {
+          return res.status(400).json({ message: "Invalid groupId" });
+        }
+
+        // Find the user and verify the invite exists
+        const user = await userCollection.findOne(
+          {
+            _id: new ObjectId(studentId),
+            "joinRequests._id": new ObjectId(requestId),
+          },
+          { projection: { joinRequests: 1, name: 1, email: 1 } }
+        );
+        if (!user)
+          return res.status(404).json({ message: "Invitation not found" });
+
+        // Get the invite we’re rejecting
+        const invite = (user.joinRequests || []).find(
+          (r) => String(r._id) === String(requestId)
+        );
+        if (!invite)
+          return res.status(404).json({ message: "Invitation not found" });
+
+        // If caller passed groupId, validate it matches the invite
+        if (groupId && String(invite.groupId) !== String(groupId)) {
+          return res
+            .status(400)
+            .json({ message: "Invite does not match groupId" });
+        }
+
+        // Remove only this invite
+        await userCollection.updateOne(
+          { _id: new ObjectId(studentId) },
+          { $pull: { joinRequests: { _id: new ObjectId(requestId) } } }
+        );
+
+        // Notify the group admin that the student declined
+        try {
+          const group = await groupsCollection.findOne({
+            _id: new ObjectId(invite.groupId),
+          });
+          if (group) {
+            await pushNotificationsToUsers([group.admin], {
+              message: `${
+                user.name || user.email || "A student"
+              } declined your invite to "${group.name}".`,
+              date: new Date(),
+              link: `/find-group/${group.admin}`,
+            });
+          }
+        } catch (e) {
+          console.error("Notify admin on reject failed:", e);
+        }
+
+        res.json({ success: true, rejected: true, requestId });
+      } catch (err) {
+        console.error("PATCH /groups/invite/:requestId/reject error:", err);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    });
+
+    // ACCEPT a specific invite
+    app.patch("/groups/invite/:requestId/accept", async (req, res) => {
+      try {
+        const { requestId } = req.params;
+        const { studentId, groupId } = req.body || {};
+        if (
+          !ObjectId.isValid(requestId) ||
+          !ObjectId.isValid(studentId) ||
+          !ObjectId.isValid(groupId)
+        ) {
+          return res.status(400).json({ message: "Invalid id(s)" });
+        }
+
+        // Make sure invite exists
+        const user = await userCollection.findOne(
+          {
+            _id: new ObjectId(studentId),
+            "joinRequests._id": new ObjectId(requestId),
+          },
+          { projection: { joinRequests: 1, name: 1, email: 1 } }
+        );
+        if (!user)
+          return res.status(404).json({ message: "Invitation not found" });
+
+        const invite = (user.joinRequests || []).find(
+          (r) => String(r._id) === String(requestId)
+        );
+        if (!invite || String(invite.groupId) !== String(groupId)) {
+          return res
+            .status(400)
+            .json({ message: "Invite does not match groupId" });
+        }
+
+        // Standard join checks
+        const group = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+        });
+        if (!group) return res.status(404).json({ message: "Group not found" });
+
+        const studentObjId = new ObjectId(studentId);
+        const alreadyInGroup = await groupsCollection.findOne({
+          $or: [{ admin: studentObjId }, { members: studentObjId }],
+        });
+        if (alreadyInGroup) {
+          // Clear all invites if they already joined somewhere else
+          await userCollection.updateOne(
+            { _id: studentObjId },
+            { $set: { joinRequests: [] } }
+          );
+          return res
+            .status(409)
+            .json({ message: "Student already belongs to a group" });
+        }
+
+        const maxMembers = group.maxMembers || 5;
+        const membersArr = Array.isArray(group.members) ? group.members : [];
+        if (membersArr.length >= maxMembers) {
+          // Remove only this invite to avoid dangling
+          await userCollection.updateOne(
+            { _id: studentObjId },
+            { $pull: { joinRequests: { _id: new ObjectId(requestId) } } }
+          );
+          return res.status(409).json({ message: "This group is full" });
+        }
+
+        // Add member and remove all invites
+        await groupsCollection.updateOne(
+          { _id: new ObjectId(groupId) },
+          { $addToSet: { members: studentObjId } }
+        );
+
+        // Clear this invite and any others
+        await userCollection.updateOne(
+          { _id: studentObjId },
+          { $set: { joinRequests: [] } }
+        );
+
+        // Also clear student pendingJoinRequests everywhere, if any
+        await groupsCollection.updateMany(
+          {},
+          { $pull: { pendingJoinRequests: { studentId: studentObjId } } }
+        );
+
+        // Notify both sides
+        await pushNotificationsToUsers([studentObjId], {
+          message: `You joined "${group.name}".`,
+          date: new Date(),
+          link: `/find-group/${studentId}`,
+        });
+        await pushNotificationsToUsers([group.admin], {
+          message: `${
+            user.name || user.email || "A student"
+          } accepted your invite to "${group.name}".`,
+          date: new Date(),
+          link: `/create-group/${group.admin}`,
+        });
+
+        const updated = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+        });
+        res.json({ success: true, accepted: true, group: updated });
+      } catch (err) {
+        console.error("PATCH /groups/invite/:requestId/accept error:", err);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    });
+
     // GET /users/:id/join-requests
     app.get("/users/:id/join-requests", async (req, res) => {
       try {
@@ -1365,6 +1557,346 @@ async function run() {
         res.send({ success: true });
       } catch (err) {
         console.error("PATCH /users/:id/join-requests/clear error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // Is this user already in ANY group (as admin or member)?
+    const isUserInAnyGroup = async (studentId) => {
+      const _id = new ObjectId(studentId);
+      const group = await groupsCollection.findOne({
+        $or: [{ admin: _id }, { members: _id }],
+      });
+      return Boolean(group);
+    };
+
+    // GET /groups/check-membership/:studentId
+    app.get("/groups/check-membership/:studentId", async (req, res) => {
+      try {
+        const { studentId } = req.params;
+        if (!ObjectId.isValid(studentId)) {
+          return res.status(400).send({ message: "Invalid studentId" });
+        }
+        const inGroup = await isUserInAnyGroup(studentId);
+        res.send({ inGroup });
+      } catch (err) {
+        console.error("GET /groups/check-membership error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    app.post("/groups/:groupId/request-join", async (req, res) => {
+      try {
+        const { groupId } = req.params;
+        const { studentId } = req.body || {};
+
+        if (!ObjectId.isValid(groupId) || !ObjectId.isValid(studentId)) {
+          return res
+            .status(400)
+            .send({ message: "Invalid groupId or studentId" });
+        }
+
+        const group = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+        });
+        if (!group) return res.status(404).send({ message: "Group not found" });
+
+        // student must exist and be a student
+        const student = await userCollection.findOne({
+          _id: new ObjectId(studentId),
+          role: "student",
+        });
+        if (!student)
+          return res.status(404).send({ message: "Student not found" });
+
+        // already in ANY group?
+        if (await isUserInAnyGroup(studentId)) {
+          return res
+            .status(409)
+            .send({ message: "You already belong to a group" });
+        }
+
+        // cannot request own group; cannot request a group you already belong to; cannot request full group
+        const membersArr = Array.isArray(group.members) ? group.members : [];
+        const maxMembers = group.maxMembers || 5;
+        const isAdmin = String(group.admin) === String(studentId);
+        const isMember = membersArr.some(
+          (m) => String(m) === String(studentId)
+        );
+        const full = membersArr.length >= maxMembers;
+
+        if (isAdmin)
+          return res
+            .status(403)
+            .send({ message: "You are the admin of this group" });
+        if (isMember)
+          return res
+            .status(409)
+            .send({ message: "You are already a member of this group" });
+        if (full)
+          return res.status(409).send({ message: "This group is full" });
+
+        // prevent duplicate pending requests
+        const alreadyPending =
+          Array.isArray(group.pendingJoinRequests) &&
+          group.pendingJoinRequests.some(
+            (req) => String(req.studentId) === String(studentId)
+          );
+
+        if (alreadyPending) {
+          return res.status(409).send({ message: "Join request already sent" });
+        }
+
+        // push request
+        await groupsCollection.updateOne(
+          { _id: new ObjectId(groupId) },
+          {
+            $push: {
+              pendingJoinRequests: {
+                studentId: new ObjectId(studentId),
+                date: new Date(),
+              },
+            },
+          }
+        );
+
+        // notify admin
+        const notification = {
+          message: `${
+            student.name || student.email || "A student"
+          } requested to join your group "${group.name}".`,
+          date: new Date(),
+          link: `/find-group/${group.admin}`, // or a dedicated "manage group" page
+        };
+        await pushNotificationsToUsers([group.admin], notification);
+
+        res.status(201).send({ success: true });
+      } catch (err) {
+        console.error("POST /groups/:groupId/request-join error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // GET all pending join requests for a group with student details (flat shape)
+    app.get("/groups/:groupId/requests", async (req, res) => {
+      try {
+        const { groupId } = req.params;
+        if (!ObjectId.isValid(groupId)) {
+          return res.status(400).send({ message: "Invalid groupId" });
+        }
+
+        const group = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+        });
+        if (!group) return res.status(404).send({ message: "Group not found" });
+
+        const pending = Array.isArray(group.pendingJoinRequests)
+          ? group.pendingJoinRequests
+          : [];
+
+        if (pending.length === 0) return res.send([]);
+
+        // Normalize request studentIds -> ObjectIds, skip invalid
+        const reqItems = pending
+          .map((r) => {
+            const raw = r.studentId;
+            const sid = typeof raw === "string" ? raw : String(raw); // stringify either way
+            const oid = ObjectId.isValid(sid) ? new ObjectId(sid) : null;
+            return { sid, oid, requestedAt: r.date || r.requestedAt || null };
+          })
+          .filter((r) => r.oid); // keep only valid ObjectIds
+
+        if (reqItems.length === 0) return res.send([]);
+
+        // Fetch those students
+        const students = await userCollection
+          .find(
+            { _id: { $in: reqItems.map((r) => r.oid) } },
+            { projection: { password: 0 } }
+          )
+          .toArray();
+
+        // Index by stringified _id for easy merge
+        const byId = Object.fromEntries(
+          students.map((s) => [String(s._id), s])
+        );
+
+        // Build flat response rows
+        const out = reqItems
+          .map((r) => {
+            const s = byId[r.sid];
+            return {
+              studentId: r.sid, // Mongo _id (string)
+              name: s?.name || "Unnamed Student",
+              email: s?.email ?? null,
+              studentIdStr: s?.studentId ?? null, // university student ID
+              photoUrl: s?.photoUrl ?? null,
+              requestedAt: r.requestedAt, // when the request was made
+            };
+          })
+          // remove any rows that failed to hydrate (should be rare)
+          .filter((x) => x.name)
+          // newest first
+          .sort(
+            (a, b) =>
+              new Date(b.requestedAt || 0) - new Date(a.requestedAt || 0)
+          );
+
+        res.send(out);
+      } catch (err) {
+        console.error("GET /groups/:groupId/requests error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    app.patch("/groups/:groupId/requests/:studentId", async (req, res) => {
+      try {
+        const { groupId, studentId } = req.params;
+        const { decision } = req.body || {};
+
+        if (!ObjectId.isValid(groupId) || !ObjectId.isValid(studentId)) {
+          return res.status(400).send({ message: "Invalid id(s)" });
+        }
+        if (!["accept", "reject"].includes(String(decision))) {
+          return res
+            .status(400)
+            .send({ message: "Decision must be 'accept' or 'reject'" });
+        }
+
+        const group = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+        });
+        if (!group) return res.status(404).send({ message: "Group not found" });
+
+        // ensure that request exists
+        const pending = Array.isArray(group.pendingJoinRequests)
+          ? group.pendingJoinRequests
+          : [];
+        const hasRequest = pending.some(
+          (r) => String(r.studentId) === String(studentId)
+        );
+        if (!hasRequest) {
+          return res.status(404).send({ message: "No such pending request" });
+        }
+
+        const student = await userCollection.findOne({
+          _id: new ObjectId(studentId),
+          role: "student",
+        });
+        if (!student)
+          return res.status(404).send({ message: "Student not found" });
+
+        if (decision === "reject") {
+          // remove from pending
+          await groupsCollection.updateOne(
+            { _id: new ObjectId(groupId) },
+            {
+              $pull: {
+                pendingJoinRequests: { studentId: new ObjectId(studentId) },
+              },
+            }
+          );
+
+          // notify student
+          await pushNotificationsToUsers([studentId], {
+            message: `Your request to join "${group.name}" was rejected by the group admin.`,
+            date: new Date(),
+            link: `/find-group/${studentId}`,
+          });
+
+          return res.send({ success: true, decision: "rejected" });
+        }
+
+        // accept flow:
+        // 1) block if student already in any group
+        if (await isUserInAnyGroup(studentId)) {
+          // also remove the stale pending request
+          await groupsCollection.updateOne(
+            { _id: new ObjectId(groupId) },
+            {
+              $pull: {
+                pendingJoinRequests: { studentId: new ObjectId(studentId) },
+              },
+            }
+          );
+          return res
+            .status(409)
+            .send({ message: "Student already belongs to a group" });
+        }
+
+        // 2) block if this group is full now
+        const membersArr = Array.isArray(group.members) ? group.members : [];
+        const maxMembers = group.maxMembers || 5;
+        if (membersArr.length >= maxMembers) {
+          // still remove pending request to avoid dangling
+          await groupsCollection.updateOne(
+            { _id: new ObjectId(groupId) },
+            {
+              $pull: {
+                pendingJoinRequests: { studentId: new ObjectId(studentId) },
+              },
+            }
+          );
+          return res.status(409).send({ message: "This group is full" });
+        }
+
+        // 3) add to members + remove pending for this student
+        await groupsCollection.updateOne(
+          { _id: new ObjectId(groupId) },
+          {
+            $addToSet: { members: new ObjectId(studentId) },
+            $pull: {
+              pendingJoinRequests: { studentId: new ObjectId(studentId) },
+            },
+          }
+        );
+
+        +(
+          // 3.5) Remove this student's other pending join requests from ALL groups
+          (await groupsCollection.updateMany(
+            {},
+            {
+              $pull: {
+                pendingJoinRequests: { studentId: new ObjectId(studentId) },
+              },
+            }
+          ))
+        );
+
+        await userCollection.updateOne(
+          { _id: new ObjectId(studentId) },
+          { $set: { joinRequests: [] } } // remove all invites sent TO this student
+        );
+
+        //    - Optionally, if you also store "pendingInvites" inside groups (admin→student),
+        //      you can cleanup those too to be safe:
+        await groupsCollection.updateMany(
+          {},
+          { $pull: { pendingInvites: { studentId: new ObjectId(studentId) } } }
+        );
+
+        // 5) notify both student and group admin
+        await pushNotificationsToUsers([studentId], {
+          message: `Your request to join "${group.name}" was accepted. You are now a member.`,
+          date: new Date(),
+          link: `/find-group/${studentId}`,
+        });
+
+        await pushNotificationsToUsers([group.admin], {
+          message: `${
+            student.name || student.email || "A student"
+          } has joined your group "${group.name}".`,
+          date: new Date(),
+          link: `/create-group/${group.admin}`, // or a group management page
+        });
+
+        // 6) return updated group
+        const updated = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+        });
+        res.send({ success: true, decision: "accepted", group: updated });
+      } catch (err) {
+        console.error("PATCH /groups/:groupId/requests/:studentId error:", err);
         res.status(500).send({ message: "Internal server error" });
       }
     });
