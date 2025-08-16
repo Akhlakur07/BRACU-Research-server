@@ -207,7 +207,80 @@ async function run() {
         res.status(500).send({ message: "Failed to fetch supervisors" });
       }
     });
-    //
+    // Get supervisor by ID
+    app.get("/supervisor/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ message: "Invalid ID format" });
+        }
+
+        const supervisor = await userCollection.findOne(
+          { _id: new ObjectId(id), role: "supervisor" },
+          { projection: { password: 0 } } // hide password
+        );
+
+        if (!supervisor) {
+          return res.status(404).json({ message: "Supervisor not found" });
+        }
+
+        res.json(supervisor);
+      } catch (err) {
+        console.error("Error fetching supervisor:", err);
+        res.status(500).json({ message: "Error fetching supervisor" });
+      }
+});
+    // Update supervisor profile
+    app.put("/supervisor/update/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ message: "Invalid ID format" });
+        }
+
+        // Allowed fields for supervisor update
+        const allowedFields = [
+          "name",
+          "department",
+          "phone",
+          "researchArea",
+          "photoUrl",
+        ];
+
+        const updateData = {};
+        for (const field of allowedFields) {
+          if (req.body[field] !== undefined) {
+            updateData[field] = req.body[field];
+          }
+        }
+
+        // Basic validations
+        if (updateData.name && updateData.name.trim().length < 2) {
+          return res.status(400).json({ message: "Name must be at least 2 characters" });
+        }
+
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id), role: "supervisor" },
+          { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ message: "Supervisor profile not found" });
+        }
+
+        const updatedSupervisor = await userCollection.findOne(
+          { _id: new ObjectId(id) },
+          { projection: { password: 0 } } // hide password
+        );
+
+        res.json(updatedSupervisor);
+      } catch (err) {
+        console.error("Supervisor profile update error:", err);
+        res.status(500).json({ message: "Error updating supervisor profile" });
+      }
+    });
     app.put("/users/:id/notifications/seen", async (req, res) => {
       try {
         const { id } = req.params;
