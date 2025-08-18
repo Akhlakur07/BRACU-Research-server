@@ -3,6 +3,9 @@ const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
+const axios = require("axios");
+const xml2js = require("xml2js");
+
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -1900,6 +1903,155 @@ async function run() {
         res.status(500).send({ message: "Internal server error" });
       }
     });
+
+   // Search papers from arXiv
+app.get("/search-papers", async (req, res) => {
+  const { q, start } = req.query;
+  const query = q || "computer science"; // default keyword
+  const startIndex = parseInt(start) || 0;
+  const max_results = 50; // smaller number for testing
+
+  try {
+    const response = await axios.get(
+      `http://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(
+        query
+      )}&start=${startIndex}&max_results=${max_results}`
+    );
+
+    xml2js.parseString(response.data, (err, result) => {
+      if (err) return res.status(500).json({ error: "XML parsing failed" });
+
+      const papers = result.feed.entry || [];
+      const formatted = papers.map((paper) => ({
+        id: paper.id[0],
+        title: paper.title[0].replace(/\n/g, " ").trim(),
+        summary: paper.summary[0].replace(/\n/g, " ").trim(),
+        authors: paper.author.map((a) => a.name[0]),
+        published: paper.published[0],
+        link: paper.id[0],
+      }));
+
+      res.json(formatted);
+    });
+  } catch (error) {
+    console.error("Arxiv API Error:", error.message);
+    res.status(500).json({ error: "Failed to fetch papers from arXiv" });
+  }
+});
+// Get 5 random papers
+app.get("/random-papers", async (req, res) => {
+  try {
+    const response = await axios.get(
+      `http://export.arxiv.org/api/query?search_query=all:computer%20science&start=0&max_results=50`
+    );
+
+    xml2js.parseString(response.data, (err, result) => {
+      if (err) return res.status(500).json({ error: "XML parsing failed" });
+
+      const papers = result.feed.entry || [];
+      const formatted = papers.map((paper) => ({
+        id: paper.id[0],
+        title: paper.title[0].replace(/\n/g, " ").trim(),
+        summary: paper.summary[0].replace(/\n/g, " ").trim(),
+        authors: paper.author.map((a) => a.name[0]),
+        published: paper.published[0],
+        link: paper.id[0],
+      }));
+
+      // Pick 5 random papers
+      const shuffled = formatted.sort(() => 0.5 - Math.random());
+      const randomFive = shuffled.slice(0, 5);
+
+      res.json(randomFive);
+    });
+  } catch (error) {
+    console.error("Arxiv API Error:", error.message);
+    res.status(500).json({ error: "Failed to fetch random papers" });
+  }
+});
+
+
+
+    // Add a paper to bookmarks
+    app.post("/users/:id/bookmarks", async (req, res) => {
+      const { id } = req.params;
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: "Invalid user id" });
+      }
+
+      const paper = req.body; // expects {paperId, title, authors, summary, link}
+
+      try {
+        // Prevent duplicates
+        const user = await userCollection.findOne({ _id: new ObjectId(id) });
+        if (!user) return res.status(404).send({ message: "User not found" });
+
+        const alreadyBookmarked = user.bookmarks?.find(
+          (b) => b.paperId === paper.paperId
+        );
+        if (alreadyBookmarked) {
+          return res.status(400).send({ message: "Paper already bookmarked" });
+        }
+
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $push: { bookmarks: paper } }
+        );
+
+        res.send({ success: true, message: "Paper bookmarked" });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // Get all bookmarks for a user
+    app.get("/users/:id/bookmarks", async (req, res) => {
+      const { id } = req.params;
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: "Invalid user id" });
+      }
+
+      try {
+        const user = await userCollection.findOne({ _id: new ObjectId(id) });
+        if (!user) return res.status(404).send({ message: "User not found" });
+
+        res.send(user.bookmarks || []);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+    
+// Remove a bookmarked paper
+app.delete("/users/:id/bookmarks/:paperId", async (req, res) => {
+  const { id } = req.params;
+  // paperId may contain slashes, so get it from req.params with decodeURIComponent
+  const paperId = decodeURIComponent(req.params.paperId);
+
+  if (!ObjectId.isValid(id))
+    return res.status(400).send({ message: "Invalid user id" });
+
+  try {
+    const result = await userCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $pull: { bookmarks: { paperId: paperId } } }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res
+        .status(404)
+        .send({ success: false, message: "Bookmark not found" });
+    }
+
+    res.send({ success: true, message: "Bookmark removed" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+
 
     await client.db("admin").command({ ping: 1 });
     console.log("Connected to MongoDB");
