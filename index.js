@@ -1904,73 +1904,71 @@ async function run() {
       }
     });
 
-   // Search papers from arXiv
-app.get("/search-papers", async (req, res) => {
-  const { q, start } = req.query;
-  const query = q || "computer science"; // default keyword
-  const startIndex = parseInt(start) || 0;
-  const max_results = 50; // smaller number for testing
+    // Search papers from arXiv
+    app.get("/search-papers", async (req, res) => {
+      const { q, start } = req.query;
+      const query = q || "computer science"; // default keyword
+      const startIndex = parseInt(start) || 0;
+      const max_results = 50; // smaller number for testing
 
-  try {
-    const response = await axios.get(
-      `http://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(
-        query
-      )}&start=${startIndex}&max_results=${max_results}`
-    );
+      try {
+        const response = await axios.get(
+          `http://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(
+            query
+          )}&start=${startIndex}&max_results=${max_results}`
+        );
 
-    xml2js.parseString(response.data, (err, result) => {
-      if (err) return res.status(500).json({ error: "XML parsing failed" });
+        xml2js.parseString(response.data, (err, result) => {
+          if (err) return res.status(500).json({ error: "XML parsing failed" });
 
-      const papers = result.feed.entry || [];
-      const formatted = papers.map((paper) => ({
-        id: paper.id[0],
-        title: paper.title[0].replace(/\n/g, " ").trim(),
-        summary: paper.summary[0].replace(/\n/g, " ").trim(),
-        authors: paper.author.map((a) => a.name[0]),
-        published: paper.published[0],
-        link: paper.id[0],
-      }));
+          const papers = result.feed.entry || [];
+          const formatted = papers.map((paper) => ({
+            id: paper.id[0],
+            title: paper.title[0].replace(/\n/g, " ").trim(),
+            summary: paper.summary[0].replace(/\n/g, " ").trim(),
+            authors: paper.author.map((a) => a.name[0]),
+            published: paper.published[0],
+            link: paper.id[0],
+          }));
 
-      res.json(formatted);
+          res.json(formatted);
+        });
+      } catch (error) {
+        console.error("Arxiv API Error:", error.message);
+        res.status(500).json({ error: "Failed to fetch papers from arXiv" });
+      }
     });
-  } catch (error) {
-    console.error("Arxiv API Error:", error.message);
-    res.status(500).json({ error: "Failed to fetch papers from arXiv" });
-  }
-});
-// Get 5 random papers
-app.get("/random-papers", async (req, res) => {
-  try {
-    const response = await axios.get(
-      `http://export.arxiv.org/api/query?search_query=all:computer%20science&start=0&max_results=50`
-    );
+    // Get 5 random papers
+    app.get("/random-papers", async (req, res) => {
+      try {
+        const response = await axios.get(
+          `http://export.arxiv.org/api/query?search_query=all:computer%20science&start=0&max_results=50`
+        );
 
-    xml2js.parseString(response.data, (err, result) => {
-      if (err) return res.status(500).json({ error: "XML parsing failed" });
+        xml2js.parseString(response.data, (err, result) => {
+          if (err) return res.status(500).json({ error: "XML parsing failed" });
 
-      const papers = result.feed.entry || [];
-      const formatted = papers.map((paper) => ({
-        id: paper.id[0],
-        title: paper.title[0].replace(/\n/g, " ").trim(),
-        summary: paper.summary[0].replace(/\n/g, " ").trim(),
-        authors: paper.author.map((a) => a.name[0]),
-        published: paper.published[0],
-        link: paper.id[0],
-      }));
+          const papers = result.feed.entry || [];
+          const formatted = papers.map((paper) => ({
+            id: paper.id[0],
+            title: paper.title[0].replace(/\n/g, " ").trim(),
+            summary: paper.summary[0].replace(/\n/g, " ").trim(),
+            authors: paper.author.map((a) => a.name[0]),
+            published: paper.published[0],
+            link: paper.id[0],
+          }));
 
-      // Pick 5 random papers
-      const shuffled = formatted.sort(() => 0.5 - Math.random());
-      const randomFive = shuffled.slice(0, 5);
+          // Pick 5 random papers
+          const shuffled = formatted.sort(() => 0.5 - Math.random());
+          const randomFive = shuffled.slice(0, 5);
 
-      res.json(randomFive);
+          res.json(randomFive);
+        });
+      } catch (error) {
+        console.error("Arxiv API Error:", error.message);
+        res.status(500).json({ error: "Failed to fetch random papers" });
+      }
     });
-  } catch (error) {
-    console.error("Arxiv API Error:", error.message);
-    res.status(500).json({ error: "Failed to fetch random papers" });
-  }
-});
-
-
 
     // Add a paper to bookmarks
     app.post("/users/:id/bookmarks", async (req, res) => {
@@ -2022,36 +2020,116 @@ app.get("/random-papers", async (req, res) => {
         res.status(500).send({ message: "Internal server error" });
       }
     });
-    
-// Remove a bookmarked paper
-app.delete("/users/:id/bookmarks/:paperId", async (req, res) => {
-  const { id } = req.params;
-  // paperId may contain slashes, so get it from req.params with decodeURIComponent
-  const paperId = decodeURIComponent(req.params.paperId);
 
-  if (!ObjectId.isValid(id))
-    return res.status(400).send({ message: "Invalid user id" });
+    // Remove a bookmarked paper
+    app.delete("/users/:id/bookmarks/:paperId", async (req, res) => {
+      const { id } = req.params;
+      // paperId may contain slashes, so get it from req.params with decodeURIComponent
+      const paperId = decodeURIComponent(req.params.paperId);
 
-  try {
-    const result = await userCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $pull: { bookmarks: { paperId: paperId } } }
-    );
+      if (!ObjectId.isValid(id))
+        return res.status(400).send({ message: "Invalid user id" });
 
-    if (result.modifiedCount === 0) {
-      return res
-        .status(404)
-        .send({ success: false, message: "Bookmark not found" });
-    }
+      try {
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $pull: { bookmarks: { paperId: paperId } } }
+        );
 
-    res.send({ success: true, message: "Bookmark removed" });
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ message: "Internal server error" });
-  }
-});
+        if (result.modifiedCount === 0) {
+          return res
+            .status(404)
+            .send({ success: false, message: "Bookmark not found" });
+        }
 
+        res.send({ success: true, message: "Bookmark removed" });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
 
+    // Recommend a paper to a group
+    app.post("/groups/:groupId/recommend-paper", async (req, res) => {
+      try {
+        const { groupId } = req.params;
+        const { supervisorId, paper } = req.body || {};
+
+        if (!ObjectId.isValid(groupId) || !ObjectId.isValid(supervisorId)) {
+          return res.status(400).json({ message: "Invalid id(s)" });
+        }
+
+        // basic paper validation
+        const { paperId, title, authors, summary, link } = paper || {};
+        if (!paperId || !title || !link) {
+          return res
+            .status(400)
+            .json({ message: "paperId, title, and link are required" });
+        }
+
+        // Load group
+        const group = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+        });
+        if (!group) return res.status(404).json({ message: "Group not found" });
+
+        // Must be this group's assigned supervisor
+        if (String(group.assignedSupervisor) !== String(supervisorId)) {
+          return res
+            .status(403)
+            .json({ message: "Not authorized to recommend to this group" });
+        }
+
+        // Avoid duplicates by paperId
+        const already = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+          "recommendedFeatures.paperId": paperId,
+        });
+        if (already) {
+          return res
+            .status(409)
+            .json({ message: "Paper already recommended to this group" });
+        }
+
+        const payload = {
+          paperId: String(paperId),
+          title: String(title),
+          authors: Array.isArray(authors) ? authors : [],
+          summary: typeof summary === "string" ? summary : "",
+          link: String(link),
+          recommendedBy: new ObjectId(supervisorId),
+          recommendedAt: new Date(),
+        };
+
+        const upd = await groupsCollection.updateOne(
+          { _id: new ObjectId(groupId) },
+          { $push: { recommendedFeatures: payload } }
+        );
+
+        if (!upd.matchedCount) {
+          return res.status(500).json({ message: "Failed to recommend paper" });
+        }
+
+        try {
+          const memberIds = (group.members || []).map((m) => new ObjectId(m));
+          await pushNotificationsToUsers(memberIds, {
+            message: `A new paper was recommended to your group "${group.name}": ${title}`,
+            date: new Date(),
+            link: payload.link,
+          });
+        } catch (e) {
+          console.error("Notify members on recommend failed:", e);
+        }
+
+        const updated = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+        });
+        res.json({ success: true, group: updated });
+      } catch (err) {
+        console.error("POST /groups/:groupId/recommend-paper error:", err);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    });
 
     await client.db("admin").command({ ping: 1 });
     console.log("Connected to MongoDB");
