@@ -31,6 +31,7 @@ async function run() {
     const proposalsCollection = db.collection("proposals");
     const groupsCollection = db.collection("groups");
     const faqsCollection = db.collection("faqs");
+    const meetingsCollection = db.collection("meetings");
 
     //register user
     app.post("/users", async (req, res) => {
@@ -2128,6 +2129,323 @@ async function run() {
       } catch (err) {
         console.error("POST /groups/:groupId/recommend-paper error:", err);
         res.status(500).json({ message: "Internal server error" });
+      }
+    });
+
+    // POST /meetings - Create a new meeting
+    app.post("/meetings", async (req, res) => {
+      try {
+        const { title, date, time, groupId, meetingLink, supervisorId } = req.body;
+
+        // Validation
+        if (!title || !date || !time || !groupId || !supervisorId) {
+          return res.status(400).send({ 
+            message: "Title, date, time, groupId, and supervisorId are required" 
+          });
+        }
+
+        if (!ObjectId.isValid(groupId) || !ObjectId.isValid(supervisorId)) {
+          return res.status(400).send({ message: "Invalid groupId or supervisorId" });
+        }
+
+        // Verify supervisor and group relationship
+        const group = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+          assignedSupervisor: new ObjectId(supervisorId)
+        });
+
+        if (!group) {
+          return res.status(403).send({ 
+            message: "You are not authorized to schedule meetings for this group" 
+          });
+        }
+
+        // Create meeting
+        const meeting = {
+          title: title.trim(),
+          date,
+          time,
+          groupId: new ObjectId(groupId),
+          supervisorId: new ObjectId(supervisorId),
+          meetingLink: meetingLink?.trim() || null,
+          createdAt: new Date(),
+          status: "scheduled" // scheduled, completed, cancelled
+        };
+
+        const result = await meetingsCollection.insertOne(meeting);
+        const createdMeeting = await meetingsCollection.findOne({ _id: result.insertedId });
+
+        // Notify group members
+        const memberIds = (group.members || []).map(m => new ObjectId(m));
+        const supervisor = await userCollection.findOne({ _id: new ObjectId(supervisorId) });
+        
+        await pushNotificationsToUsers(memberIds, {
+          message: `New meeting scheduled: "${title}" on ${date} at ${time} by ${supervisor?.name || 'your supervisor'}`,
+          date: new Date(),
+          link: `/student-dashboard`
+        });
+
+        res.status(201).send({ 
+          success: true, 
+          meeting: createdMeeting,
+          message: "Meeting scheduled successfully" 
+        });
+      } catch (err) {
+        console.error("POST /meetings error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // GET /meetings - Fetch meetings
+    app.get("/meetings", async (req, res) => {
+      try {
+        const { supervisorId, groupId, studentId } = req.query;
+        let filter = {};
+
+        if (supervisorId) {
+          if (!ObjectId.isValid(supervisorId)) {
+            return res.status(400).send({ message: "Invalid supervisorId" });
+          }
+          filter.supervisorId = new ObjectId(supervisorId);
+        }
+
+        if (groupId) {
+          if (!ObjectId.isValid(groupId)) {
+            return res.status(400).send({ message: "Invalid groupId" });
+          }
+          filter.groupId = new ObjectId(groupId);
+        }
+
+        if (studentId) {
+          if (!ObjectId.isValid(studentId)) {
+            return res.status(400).send({ message: "Invalid studentId" });
+          }
+          
+          // Find groups where this student is a member
+          const studentGroups = await groupsCollection.find({
+            members: new ObjectId(studentId)
+          }).toArray();
+          
+          const groupIds = studentGroups.map(g => g._id);
+          filter.groupId = { $in: groupIds };
+        }
+
+        const meetings = await meetingsCollection
+          .find(filter)
+          .sort({ date: 1, time: 1 }) // Sort by upcoming meetings first
+          .toArray();
+
+        // Populate group and supervisor info
+        const enrichedMeetings = await Promise.all(
+          meetings.map(async (meeting) => {
+            const group = await groupsCollection.findOne({ _id: meeting.groupId });
+            const supervisor = await userCollection.findOne(
+              { _id: meeting.supervisorId },
+              { projection: { password: 0 } }
+            );
+
+            return {
+              ...meeting,
+              groupName: group?.name || "Unknown Group",
+              supervisorName: supervisor?.name || "Unknown Supervisor"
+            };
+          })
+        );
+
+        res.send(enrichedMeetings);
+      } catch (err) {
+        console.error("GET /meetings error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // PUT /meetings/:id - Update a meeting
+    app.put("/meetings/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { title, date, time, groupId, meetingLink, supervisorId } = req.body;
+
+        if (!ObjectId.isValid(id) || !ObjectId.isValid(supervisorId)) {
+          return res.status(400).send({ message: "Invalid id(s)" });
+        }
+
+        // Validation
+        if (!title || !date || !time || !groupId) {
+          return res.status(400).send({ 
+            message: "Title, date, time, and groupId are required" 
+          });
+        }
+
+        if (!ObjectId.isValid(groupId)) {
+          return res.status(400).send({ message: "Invalid groupId" });
+        }
+
+        const meeting = await meetingsCollection.findOne({ _id: new ObjectId(id) });
+        if (!meeting) {
+          return res.status(404).send({ message: "Meeting not found" });
+        }
+
+        // Verify supervisor authorization
+        if (String(meeting.supervisorId) !== String(supervisorId)) {
+          return res.status(403).send({ 
+            message: "Not authorized to update this meeting" 
+          });
+        }
+
+        // Verify supervisor and group relationship
+        const group = await groupsCollection.findOne({
+          _id: new ObjectId(groupId),
+          assignedSupervisor: new ObjectId(supervisorId)
+        });
+
+        if (!group) {
+          return res.status(403).send({ 
+            message: "You are not authorized to schedule meetings for this group" 
+          });
+        }
+
+        // Update meeting
+        const updateData = {
+          title: title.trim(),
+          date,
+          time,
+          groupId: new ObjectId(groupId),
+          meetingLink: meetingLink?.trim() || null,
+          updatedAt: new Date()
+        };
+
+        const result = await meetingsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: "Meeting not found" });
+        }
+
+        const updatedMeeting = await meetingsCollection.findOne({ _id: new ObjectId(id) });
+
+        // Notify group members about the update
+        const memberIds = (group.members || []).map(m => new ObjectId(m));
+        const supervisor = await userCollection.findOne({ _id: new ObjectId(supervisorId) });
+        
+        await pushNotificationsToUsers(memberIds, {
+          message: `Meeting "${title}" has been updated by ${supervisor?.name || 'your supervisor'}`,
+          date: new Date(),
+          link: `/student-dashboard`
+        });
+
+        res.send({ 
+          success: true, 
+          meeting: updatedMeeting,
+          message: "Meeting updated successfully" 
+        });
+      } catch (err) {
+        console.error("PUT /meetings/:id error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // DELETE /meetings/:id - Delete a meeting
+    app.delete("/meetings/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { supervisorId } = req.body;
+
+        if (!ObjectId.isValid(id) || !ObjectId.isValid(supervisorId)) {
+          return res.status(400).send({ message: "Invalid id(s)" });
+        }
+
+        const meeting = await meetingsCollection.findOne({ _id: new ObjectId(id) });
+        if (!meeting) {
+          return res.status(404).send({ message: "Meeting not found" });
+        }
+
+        // Verify supervisor authorization
+        if (String(meeting.supervisorId) !== String(supervisorId)) {
+          return res.status(403).send({ 
+            message: "Not authorized to delete this meeting" 
+          });
+        }
+
+        // Get group info for notifications
+        const group = await groupsCollection.findOne({ _id: meeting.groupId });
+        
+        const result = await meetingsCollection.deleteOne({ _id: new ObjectId(id) });
+
+        if (result.deletedCount === 0) {
+          return res.status(404).send({ message: "Meeting not found" });
+        }
+
+        // Notify group members about the deletion
+        if (group) {
+          const memberIds = (group.members || []).map(m => new ObjectId(m));
+          const supervisor = await userCollection.findOne({ _id: new ObjectId(supervisorId) });
+          
+          await pushNotificationsToUsers(memberIds, {
+            message: `Meeting "${meeting.title}" has been cancelled by ${supervisor?.name || 'your supervisor'}`,
+            date: new Date(),
+            link: `/student-dashboard`
+          });
+        }
+
+        res.send({ 
+          success: true, 
+          message: "Meeting deleted successfully" 
+        });
+      } catch (err) {
+        console.error("DELETE /meetings/:id error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // PATCH /meetings/:id/status - Update meeting status (complete, cancel, etc.)
+    app.patch("/meetings/:id/status", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { status, supervisorId } = req.body;
+
+        if (!ObjectId.isValid(id) || !ObjectId.isValid(supervisorId)) {
+          return res.status(400).send({ message: "Invalid id(s)" });
+        }
+
+        if (!["scheduled", "completed", "cancelled"].includes(status)) {
+          return res.status(400).send({ 
+            message: "Status must be 'scheduled', 'completed', or 'cancelled'" 
+          });
+        }
+
+        const meeting = await meetingsCollection.findOne({ _id: new ObjectId(id) });
+        if (!meeting) {
+          return res.status(404).send({ message: "Meeting not found" });
+        }
+
+        // Verify supervisor authorization
+        if (String(meeting.supervisorId) !== String(supervisorId)) {
+          return res.status(403).send({ 
+            message: "Not authorized to update this meeting" 
+          });
+        }
+
+        const result = await meetingsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { 
+            $set: { 
+              status,
+              updatedAt: new Date()
+            }
+          }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: "Meeting not found" });
+        }
+
+        const updatedMeeting = await meetingsCollection.findOne({ _id: new ObjectId(id) });
+        res.send({ success: true, meeting: updatedMeeting });
+      } catch (err) {
+        console.error("PATCH /meetings/:id/status error:", err);
+        res.status(500).send({ message: "Internal server error" });
       }
     });
 
