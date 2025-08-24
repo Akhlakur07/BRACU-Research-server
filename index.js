@@ -38,7 +38,7 @@ async function run() {
       const user = {
         ...req.body,
         notifications: [],
-        isSeen: true, // default true so no red dot until something new comes
+        isSeen: true,
         joinRequests: [],
       };
       const result = await userCollection.insertOne(user);
@@ -52,6 +52,7 @@ async function run() {
       const result = await userCollection.find(filter).toArray();
       res.send(result);
     });
+    
     // Get single user by ObjectId
     app.get("/users/:id", async (req, res) => {
       const { id } = req.params;
@@ -73,8 +74,6 @@ async function run() {
         }
 
         const { name, photoUrl } = req.body;
-
-        // validate and prepare update fields (only allow these two fields)
         const updateFields = {};
         if (typeof name === "string" && name.trim() !== "")
           updateFields.name = name.trim();
@@ -118,7 +117,6 @@ async function run() {
       res.send({ message: "User deleted" });
     });
 
-    // Get student profile (now using ID parameter)
     app.get("/profile/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -142,7 +140,6 @@ async function run() {
       }
     });
 
-    // Update student profile (now using ID parameter)
     app.put("/profile/update/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -207,7 +204,7 @@ async function run() {
         res.status(500).json({ message: "Error updating profile" });
       }
     });
-    // Get only supervisors
+
     app.get("/supervisors", async (req, res) => {
       try {
         const supervisors = await userCollection
@@ -219,7 +216,7 @@ async function run() {
         res.status(500).send({ message: "Failed to fetch supervisors" });
       }
     });
-    // Get supervisor by ID
+
     app.get("/supervisor/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -230,7 +227,7 @@ async function run() {
 
         const supervisor = await userCollection.findOne(
           { _id: new ObjectId(id), role: "supervisor" },
-          { projection: { password: 0 } } // hide password
+          { projection: { password: 0 } } 
         );
 
         if (!supervisor) {
@@ -243,7 +240,7 @@ async function run() {
         res.status(500).json({ message: "Error fetching supervisor" });
       }
     });
-    // Update supervisor profile
+
     app.put("/supervisor/update/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -251,8 +248,6 @@ async function run() {
         if (!ObjectId.isValid(id)) {
           return res.status(400).json({ message: "Invalid ID format" });
         }
-
-        // Allowed fields for supervisor update
         const allowedFields = [
           "name",
           "department",
@@ -268,7 +263,6 @@ async function run() {
           }
         }
 
-        // Basic validations
         if (updateData.name && updateData.name.trim().length < 2) {
           return res
             .status(400)
@@ -288,7 +282,7 @@ async function run() {
 
         const updatedSupervisor = await userCollection.findOne(
           { _id: new ObjectId(id) },
-          { projection: { password: 0 } } // hide password
+          { projection: { password: 0 } }
         );
 
         res.json(updatedSupervisor);
@@ -311,14 +305,11 @@ async function run() {
       }
     });
 
-    // Post announcement
     app.post("/announcements", async (req, res) => {
       try {
         const announcement = req.body;
         announcement.createdAt = new Date();
         const result = await announcementsCollection.insertOne(announcement);
-
-        // Push notification to all students and supervisors
         const notification = {
           message: `New announcement: ${announcement.title}`,
           date: new Date(),
@@ -340,7 +331,6 @@ async function run() {
       }
     });
 
-    // Get all announcements
     app.get("/announcements", async (req, res) => {
       try {
         const announcements = await announcementsCollection
@@ -353,9 +343,6 @@ async function run() {
       }
     });
 
-    // Group
-
-    // Get single user by ObjectId
     app.get("/users/:id", async (req, res) => {
       const { id } = req.params;
       if (!ObjectId.isValid(id)) {
@@ -368,7 +355,6 @@ async function run() {
       res.send(user);
     });
 
-    // Get a group by admin (for the UI gate)
     app.get("/groups/by-admin/:adminId", async (req, res) => {
       try {
         const { adminId } = req.params;
@@ -405,7 +391,6 @@ async function run() {
             .send({ message: "At least one research interest is required" });
         }
 
-        // ensure admin exists and is a student
         const admin = await userCollection.findOne({
           _id: new ObjectId(adminId),
           role: "student",
@@ -414,7 +399,6 @@ async function run() {
           return res.status(404).send({ message: "Admin (student) not found" });
         }
 
-        // normalize interests
         const normInterests = Array.from(
           new Set(
             researchInterests
@@ -427,7 +411,7 @@ async function run() {
         const doc = {
           name: name.trim(),
           admin: new ObjectId(adminId),
-          members: [new ObjectId(adminId)], // creator is the first member
+          members: [new ObjectId(adminId)],
           researchInterests: normInterests,
           assignedSupervisor: null,
           proposalsSubmittedTo: [],
@@ -453,9 +437,6 @@ async function run() {
       }
     });
 
-    // find groups
-
-    // List all groups (lightweight projection if you want)
     app.get("/groups", async (req, res) => {
       try {
         const groups = await groupsCollection
@@ -547,7 +528,6 @@ async function run() {
             .send({ message: "At least one research interest is required" });
         }
 
-        // ensure admin exists and is a student
         const admin = await userCollection.findOne({
           _id: new ObjectId(adminId),
           role: "student",
@@ -556,7 +536,6 @@ async function run() {
           return res.status(404).send({ message: "Admin (student) not found" });
         }
 
-        // already created a group?
         const existingAsAdmin = await groupsCollection.findOne({
           admin: new ObjectId(adminId),
         });
@@ -566,7 +545,6 @@ async function run() {
             .send({ message: "You have already created a group." });
         }
 
-        // already member of any group?
         const existingAsMember = await groupsCollection.findOne({
           members: new ObjectId(adminId),
         });
@@ -630,8 +608,6 @@ async function run() {
         });
         if (!student)
           return res.status(404).send({ message: "Student not found" });
-
-        // already belongs to any group?
         const belongsSomewhere = await groupsCollection.findOne({
           members: studentObjId,
         });
@@ -665,14 +641,10 @@ async function run() {
         if (!upd.matchedCount) {
           return res.status(500).send({ message: "Failed to join group" });
         }
-
-        // Remove this student's pending join requests across ALL groups
         await groupsCollection.updateMany(
           {},
           { $pull: { pendingJoinRequests: { studentId: studentObjId } } }
         );
-
-        // Clear any outstanding invites to the student and invite records in groups
         await userCollection.updateOne(
           { _id: studentObjId },
           { $set: { joinRequests: [] } }
@@ -692,8 +664,6 @@ async function run() {
       }
     });
 
-    // Submit thesis proposal
-    // Submit thesis proposal
     app.post("/proposals", async (req, res) => {
       try {
         const {
@@ -716,8 +686,6 @@ async function run() {
         ) {
           return res.status(400).send({ message: "Invalid IDs provided" });
         }
-
-        // Check if group exists and student is the admin
         const group = await groupsCollection.findOne({
           _id: new ObjectId(groupId),
         });
@@ -729,16 +697,12 @@ async function run() {
             .status(403)
             .send({ message: "Only group creators can submit proposals" });
         }
-
-        // 🚫 Block if group already has assigned supervisor
         if (group.assignedSupervisor) {
           return res.status(403).send({
             message:
               "This group already has an assigned supervisor. You cannot submit more proposals.",
           });
         }
-
-        // Insert proposal
         const proposal = {
           title: title.trim(),
           abstract: abstract.trim(),
@@ -755,8 +719,6 @@ async function run() {
         };
 
         const result = await proposalsCollection.insertOne(proposal);
-
-        // ✅ Update group's proposalsSubmittedTo
         await groupsCollection.updateOne(
           { _id: new ObjectId(groupId) },
           { $addToSet: { proposalsSubmittedTo: new ObjectId(supervisor) } }
@@ -800,15 +762,12 @@ async function run() {
         }
 
         if (status) {
-          // allow Pending / Approved / Rejected
           filter.status = String(status);
         }
 
         if (!supervisorId && !studentId && !groupId && !status) {
           return res.status(400).send({ message: "Missing query parameter" });
         }
-
-        // Populate supervisor info (name/email) via $lookup
         const proposals = await proposalsCollection
           .aggregate([
             { $match: filter },
@@ -848,7 +807,6 @@ async function run() {
       }
     });
 
-    // POST FAQ (Admin only)
     app.post("/faqs", async (req, res) => {
       try {
         const { question, answer } = req.body;
@@ -874,7 +832,6 @@ async function run() {
       }
     });
 
-    // GET all FAQs (Visible to everyone)
     app.get("/faqs", async (req, res) => {
       try {
         const faqs = await faqsCollection
@@ -888,7 +845,6 @@ async function run() {
       }
     });
 
-    // Supervisor approves/rejects a proposal
     app.patch("/proposals/:id/decision", async (req, res) => {
       try {
         const { id } = req.params;
@@ -928,26 +884,21 @@ async function run() {
         };
 
         if (decision === "approve" && ObjectId.isValid(proposal.groupId)) {
-          // ✅ Assign supervisor to the group
           await groupsCollection.updateOne(
             { _id: new ObjectId(proposal.groupId) },
             { $set: { assignedSupervisor: new ObjectId(supervisorId) } }
           );
-
-          // ✅ Remove all other proposals from this group
           await proposalsCollection.deleteMany({
             groupId: new ObjectId(proposal.groupId),
-            _id: { $ne: new ObjectId(id) }, // keep the approved proposal
+            _id: { $ne: new ObjectId(id) }, 
           });
         }
 
-        // Update proposal status
         await proposalsCollection.updateOne(
           { _id: new ObjectId(id) },
           { $set: newFields }
         );
 
-        //  Send Notifications to group members
         if (ObjectId.isValid(proposal.groupId)) {
           const group = await groupsCollection.findOne({
             _id: new ObjectId(proposal.groupId),
@@ -995,7 +946,6 @@ async function run() {
       }
     });
 
-    // ADMIN assigns supervisor to the proposal's group
     app.patch("/admin/assign-supervisor", async (req, res) => {
       try {
         const { proposalId } = req.body || {};
@@ -1003,7 +953,6 @@ async function run() {
           return res.status(400).send({ message: "Invalid proposalId" });
         }
 
-        // Load proposal
         const proposal = await proposalsCollection.findOne({
           _id: new ObjectId(proposalId),
         });
@@ -1011,7 +960,6 @@ async function run() {
           return res.status(404).send({ message: "Proposal not found" });
         }
 
-        // Load group
         const group = await groupsCollection.findOne({
           _id: new ObjectId(proposal.groupId),
         });
@@ -1019,18 +967,15 @@ async function run() {
           return res.status(404).send({ message: "Group not found" });
         }
 
-        // Already assigned? (idempotency guard)
         const alreadyAssigned =
           group.assignedSupervisor &&
           String(group.assignedSupervisor) === String(proposal.supervisor);
 
-        // 1) Assign supervisor to the group
         await groupsCollection.updateOne(
           { _id: new ObjectId(proposal.groupId) },
           { $set: { assignedSupervisor: new ObjectId(proposal.supervisor) } }
         );
 
-        // 2) Mark this proposal as Approved (+ adminapproved flag)
         await proposalsCollection.updateOne(
           { _id: new ObjectId(proposalId) },
           {
@@ -1043,13 +988,11 @@ async function run() {
           }
         );
 
-        // 3) Remove all other proposals by this group (keep the approved one)
         await proposalsCollection.deleteMany({
           groupId: new ObjectId(proposal.groupId),
           _id: { $ne: new ObjectId(proposalId) },
         });
 
-        // 4) Notifications
         const supervisorUser = await userCollection.findOne({
           _id: new ObjectId(proposal.supervisor),
         });
@@ -1060,14 +1003,12 @@ async function run() {
           (m) => new ObjectId(m)
         );
 
-        // Notify group members
         await pushNotificationsToUsers(groupMemberIds, {
           message: `Admin assigned ${supName} as your supervisor for "${proposal.title}".`,
           date: new Date(),
           link: `/proposals/${proposal._id}`,
         });
 
-        // Notify the supervisor
         await pushNotificationsToUsers([proposal.supervisor], {
           message: `You have been assigned to supervise group "${group.name}" (proposal: "${proposal.title}").`,
           date: new Date(),
@@ -1088,7 +1029,6 @@ async function run() {
       }
     });
 
-    // ADMIN rejects a proposal (does NOT unassign anything)
     app.patch("/admin/reject-proposal", async (req, res) => {
       try {
         const { proposalId, reason } = req.body || {};
@@ -1103,7 +1043,6 @@ async function run() {
           return res.status(404).send({ message: "Proposal not found" });
         }
 
-        // Only change if still pending (optional; remove check if you want to force)
         if (proposal.status !== "Pending") {
           return res
             .status(409)
@@ -1123,7 +1062,6 @@ async function run() {
           }
         );
 
-        // Notifications
         const group = await groupsCollection.findOne({
           _id: new ObjectId(proposal.groupId),
         });
@@ -1138,7 +1076,6 @@ async function run() {
           (m) => new ObjectId(m)
         );
 
-        // Group members
         await pushNotificationsToUsers(groupMemberIds, {
           message: `Admin rejected your proposal "${proposal.title}"${
             reason ? ` — Reason: ${reason}` : ""
@@ -1147,7 +1084,6 @@ async function run() {
           link: `/proposals/${proposal._id}`,
         });
 
-        // Supervisor
         await pushNotificationsToUsers([proposal.supervisor], {
           message: `Admin rejected the proposal "${
             proposal.title
@@ -1163,7 +1099,6 @@ async function run() {
       }
     });
 
-    // Reusable helper to push notifications and flip isSeen=false
     async function pushNotificationsToUsers(userIds = [], notif = {}) {
       try {
         const ids = (userIds || [])
@@ -1186,8 +1121,6 @@ async function run() {
       }
     }
 
-    // GET /users/by-studentId/:studentId
-    // Returns the student doc (without password) by their "studentId" field
     app.get("/users/by-studentId/:studentId", async (req, res) => {
       try {
         const { studentId } = req.params;
@@ -1211,8 +1144,6 @@ async function run() {
       }
     });
 
-    // GET /groups/check-membership/:userId
-    // Returns { inGroup: boolean }
     app.get("/groups/check-membership/:userId", async (req, res) => {
       try {
         const { userId } = req.params;
@@ -1232,11 +1163,6 @@ async function run() {
       }
     });
 
-    // POST /groups/:groupId/invite
-    // Body: { studentId: "<Mongo _id of the student to invite>" }
-    // Sends a notification to that student IF they aren't in any group yet.
-    // POST /groups/:groupId/invite
-    // Body: { studentId: "<Mongo _id of the student>" }
     app.post("/groups/:groupId/invite", async (req, res) => {
       try {
         const { groupId } = req.params;
@@ -1248,7 +1174,6 @@ async function run() {
             .json({ message: "Invalid groupId or studentId" });
         }
 
-        // Load group & student
         const group = await groupsCollection.findOne({
           _id: new ObjectId(groupId),
         });
@@ -1261,7 +1186,6 @@ async function run() {
         if (!student)
           return res.status(404).json({ message: "Student not found" });
 
-        // Group full?
         const maxMembers = group.maxMembers || 5;
         const currentMembers = Array.isArray(group.members)
           ? group.members.length
@@ -1270,7 +1194,6 @@ async function run() {
           return res.status(409).json({ message: "Group is already full" });
         }
 
-        // Student already in any group?
         const alreadyInGroup = await groupsCollection.findOne({
           $or: [
             { admin: new ObjectId(studentId) },
@@ -1283,14 +1206,12 @@ async function run() {
             .json({ message: "Student already belongs to a group" });
         }
 
-        // Prevent inviting admin himself
         if (String(group.admin) === String(studentId)) {
           return res
             .status(400)
             .json({ message: "Cannot invite the group admin" });
         }
 
-        // Avoid duplicate pending request from same group
         const pendingExists = await userCollection.findOne({
           _id: new ObjectId(studentId),
           "joinRequests.groupId": new ObjectId(groupId),
@@ -1302,23 +1223,21 @@ async function run() {
             .json({ message: "An invite from this group is already pending" });
         }
 
-        // Prepare join request object
         const adminUser = await userCollection.findOne(
           { _id: new ObjectId(group.admin) },
           { projection: { name: 1, email: 1 } }
         );
 
         const joinRequest = {
-          _id: new ObjectId(), // unique id for this request
+          _id: new ObjectId(),
           groupId: new ObjectId(groupId),
           groupName: group.name || "Unnamed Group",
           invitedBy: new ObjectId(group.admin),
           invitedByName: adminUser?.name || adminUser?.email || "Group Admin",
           date: new Date(),
-          status: "pending", // pending | accepted | declined (future use)
+          status: "pending",
         };
 
-        // Push join request to student's user doc
         await userCollection.updateOne(
           { _id: new ObjectId(studentId) },
           {
@@ -1327,7 +1246,6 @@ async function run() {
           }
         );
 
-        // Notifications
         await pushNotificationsToUsers([student._id], {
           message: `You’ve been invited to join group "${group.name}".`,
           link: `/find-group/${student._id}`,
@@ -1347,7 +1265,6 @@ async function run() {
       }
     });
 
-    // REJECT a specific invite
     app.patch("/groups/invite/:requestId/reject", async (req, res) => {
       try {
         const { requestId } = req.params;
@@ -1360,7 +1277,6 @@ async function run() {
           return res.status(400).json({ message: "Invalid groupId" });
         }
 
-        // Find the user and verify the invite exists
         const user = await userCollection.findOne(
           {
             _id: new ObjectId(studentId),
@@ -1371,27 +1287,23 @@ async function run() {
         if (!user)
           return res.status(404).json({ message: "Invitation not found" });
 
-        // Get the invite we’re rejecting
         const invite = (user.joinRequests || []).find(
           (r) => String(r._id) === String(requestId)
         );
         if (!invite)
           return res.status(404).json({ message: "Invitation not found" });
 
-        // If caller passed groupId, validate it matches the invite
         if (groupId && String(invite.groupId) !== String(groupId)) {
           return res
             .status(400)
             .json({ message: "Invite does not match groupId" });
         }
 
-        // Remove only this invite
         await userCollection.updateOne(
           { _id: new ObjectId(studentId) },
           { $pull: { joinRequests: { _id: new ObjectId(requestId) } } }
         );
 
-        // Notify the group admin that the student declined
         try {
           const group = await groupsCollection.findOne({
             _id: new ObjectId(invite.groupId),
@@ -1416,7 +1328,6 @@ async function run() {
       }
     });
 
-    // ACCEPT a specific invite
     app.patch("/groups/invite/:requestId/accept", async (req, res) => {
       try {
         const { requestId } = req.params;
@@ -1429,7 +1340,6 @@ async function run() {
           return res.status(400).json({ message: "Invalid id(s)" });
         }
 
-        // Make sure invite exists
         const user = await userCollection.findOne(
           {
             _id: new ObjectId(studentId),
@@ -1449,7 +1359,6 @@ async function run() {
             .json({ message: "Invite does not match groupId" });
         }
 
-        // Standard join checks
         const group = await groupsCollection.findOne({
           _id: new ObjectId(groupId),
         });
@@ -1460,7 +1369,6 @@ async function run() {
           $or: [{ admin: studentObjId }, { members: studentObjId }],
         });
         if (alreadyInGroup) {
-          // Clear all invites if they already joined somewhere else
           await userCollection.updateOne(
             { _id: studentObjId },
             { $set: { joinRequests: [] } }
@@ -1473,7 +1381,6 @@ async function run() {
         const maxMembers = group.maxMembers || 5;
         const membersArr = Array.isArray(group.members) ? group.members : [];
         if (membersArr.length >= maxMembers) {
-          // Remove only this invite to avoid dangling
           await userCollection.updateOne(
             { _id: studentObjId },
             { $pull: { joinRequests: { _id: new ObjectId(requestId) } } }
@@ -1481,25 +1388,20 @@ async function run() {
           return res.status(409).json({ message: "This group is full" });
         }
 
-        // Add member and remove all invites
         await groupsCollection.updateOne(
           { _id: new ObjectId(groupId) },
           { $addToSet: { members: studentObjId } }
         );
 
-        // Clear this invite and any others
         await userCollection.updateOne(
           { _id: studentObjId },
           { $set: { joinRequests: [] } }
         );
-
-        // Also clear student pendingJoinRequests everywhere, if any
         await groupsCollection.updateMany(
           {},
           { $pull: { pendingJoinRequests: { studentId: studentObjId } } }
         );
 
-        // Notify both sides
         await pushNotificationsToUsers([studentObjId], {
           message: `You joined "${group.name}".`,
           date: new Date(),
@@ -1523,7 +1425,6 @@ async function run() {
       }
     });
 
-    // GET /users/:id/join-requests
     app.get("/users/:id/join-requests", async (req, res) => {
       try {
         const { id } = req.params;
@@ -1542,7 +1443,6 @@ async function run() {
       }
     });
 
-    // Clear ALL join requests for a student
     app.patch("/users/:id/join-requests/clear", async (req, res) => {
       try {
         const { id } = req.params;
@@ -1565,7 +1465,6 @@ async function run() {
       }
     });
 
-    // Is this user already in ANY group (as admin or member)?
     const isUserInAnyGroup = async (studentId) => {
       const _id = new ObjectId(studentId);
       const group = await groupsCollection.findOne({
@@ -1574,7 +1473,6 @@ async function run() {
       return Boolean(group);
     };
 
-    // GET /groups/check-membership/:studentId
     app.get("/groups/check-membership/:studentId", async (req, res) => {
       try {
         const { studentId } = req.params;
@@ -1605,7 +1503,6 @@ async function run() {
         });
         if (!group) return res.status(404).send({ message: "Group not found" });
 
-        // student must exist and be a student
         const student = await userCollection.findOne({
           _id: new ObjectId(studentId),
           role: "student",
@@ -1613,14 +1510,12 @@ async function run() {
         if (!student)
           return res.status(404).send({ message: "Student not found" });
 
-        // already in ANY group?
         if (await isUserInAnyGroup(studentId)) {
           return res
             .status(409)
             .send({ message: "You already belong to a group" });
         }
 
-        // cannot request own group; cannot request a group you already belong to; cannot request full group
         const membersArr = Array.isArray(group.members) ? group.members : [];
         const maxMembers = group.maxMembers || 5;
         const isAdmin = String(group.admin) === String(studentId);
@@ -1640,7 +1535,6 @@ async function run() {
         if (full)
           return res.status(409).send({ message: "This group is full" });
 
-        // prevent duplicate pending requests
         const alreadyPending =
           Array.isArray(group.pendingJoinRequests) &&
           group.pendingJoinRequests.some(
@@ -1651,7 +1545,6 @@ async function run() {
           return res.status(409).send({ message: "Join request already sent" });
         }
 
-        // push request
         await groupsCollection.updateOne(
           { _id: new ObjectId(groupId) },
           {
@@ -1664,13 +1557,12 @@ async function run() {
           }
         );
 
-        // notify admin
         const notification = {
           message: `${
             student.name || student.email || "A student"
           } requested to join your group "${group.name}".`,
           date: new Date(),
-          link: `/find-group/${group.admin}`, // or a dedicated "manage group" page
+          link: `/find-group/${group.admin}`, 
         };
         await pushNotificationsToUsers([group.admin], notification);
 
@@ -1681,7 +1573,6 @@ async function run() {
       }
     });
 
-    // GET all pending join requests for a group with student details (flat shape)
     app.get("/groups/:groupId/requests", async (req, res) => {
       try {
         const { groupId } = req.params;
@@ -1700,19 +1591,17 @@ async function run() {
 
         if (pending.length === 0) return res.send([]);
 
-        // Normalize request studentIds -> ObjectIds, skip invalid
         const reqItems = pending
           .map((r) => {
             const raw = r.studentId;
-            const sid = typeof raw === "string" ? raw : String(raw); // stringify either way
+            const sid = typeof raw === "string" ? raw : String(raw); 
             const oid = ObjectId.isValid(sid) ? new ObjectId(sid) : null;
             return { sid, oid, requestedAt: r.date || r.requestedAt || null };
           })
-          .filter((r) => r.oid); // keep only valid ObjectIds
+          .filter((r) => r.oid);
 
         if (reqItems.length === 0) return res.send([]);
 
-        // Fetch those students
         const students = await userCollection
           .find(
             { _id: { $in: reqItems.map((r) => r.oid) } },
@@ -1720,27 +1609,23 @@ async function run() {
           )
           .toArray();
 
-        // Index by stringified _id for easy merge
         const byId = Object.fromEntries(
           students.map((s) => [String(s._id), s])
         );
 
-        // Build flat response rows
         const out = reqItems
           .map((r) => {
             const s = byId[r.sid];
             return {
-              studentId: r.sid, // Mongo _id (string)
+              studentId: r.sid, 
               name: s?.name || "Unnamed Student",
               email: s?.email ?? null,
-              studentIdStr: s?.studentId ?? null, // university student ID
+              studentIdStr: s?.studentId ?? null,
               photoUrl: s?.photoUrl ?? null,
-              requestedAt: r.requestedAt, // when the request was made
+              requestedAt: r.requestedAt,
             };
           })
-          // remove any rows that failed to hydrate (should be rare)
           .filter((x) => x.name)
-          // newest first
           .sort(
             (a, b) =>
               new Date(b.requestedAt || 0) - new Date(a.requestedAt || 0)
@@ -1772,7 +1657,6 @@ async function run() {
         });
         if (!group) return res.status(404).send({ message: "Group not found" });
 
-        // ensure that request exists
         const pending = Array.isArray(group.pendingJoinRequests)
           ? group.pendingJoinRequests
           : [];
@@ -1791,7 +1675,6 @@ async function run() {
           return res.status(404).send({ message: "Student not found" });
 
         if (decision === "reject") {
-          // remove from pending
           await groupsCollection.updateOne(
             { _id: new ObjectId(groupId) },
             {
@@ -1801,7 +1684,6 @@ async function run() {
             }
           );
 
-          // notify student
           await pushNotificationsToUsers([studentId], {
             message: `Your request to join "${group.name}" was rejected by the group admin.`,
             date: new Date(),
@@ -1811,10 +1693,7 @@ async function run() {
           return res.send({ success: true, decision: "rejected" });
         }
 
-        // accept flow:
-        // 1) block if student already in any group
         if (await isUserInAnyGroup(studentId)) {
-          // also remove the stale pending request
           await groupsCollection.updateOne(
             { _id: new ObjectId(groupId) },
             {
@@ -1828,11 +1707,9 @@ async function run() {
             .send({ message: "Student already belongs to a group" });
         }
 
-        // 2) block if this group is full now
         const membersArr = Array.isArray(group.members) ? group.members : [];
         const maxMembers = group.maxMembers || 5;
         if (membersArr.length >= maxMembers) {
-          // still remove pending request to avoid dangling
           await groupsCollection.updateOne(
             { _id: new ObjectId(groupId) },
             {
@@ -1844,7 +1721,6 @@ async function run() {
           return res.status(409).send({ message: "This group is full" });
         }
 
-        // 3) add to members + remove pending for this student
         await groupsCollection.updateOne(
           { _id: new ObjectId(groupId) },
           {
@@ -1856,7 +1732,6 @@ async function run() {
         );
 
         +(
-          // 3.5) Remove this student's other pending join requests from ALL groups
           (await groupsCollection.updateMany(
             {},
             {
@@ -1869,17 +1744,12 @@ async function run() {
 
         await userCollection.updateOne(
           { _id: new ObjectId(studentId) },
-          { $set: { joinRequests: [] } } // remove all invites sent TO this student
+          { $set: { joinRequests: [] } }
         );
-
-        //    - Optionally, if you also store "pendingInvites" inside groups (admin→student),
-        //      you can cleanup those too to be safe:
         await groupsCollection.updateMany(
           {},
           { $pull: { pendingInvites: { studentId: new ObjectId(studentId) } } }
         );
-
-        // 5) notify both student and group admin
         await pushNotificationsToUsers([studentId], {
           message: `Your request to join "${group.name}" was accepted. You are now a member.`,
           date: new Date(),
@@ -1891,10 +1761,9 @@ async function run() {
             student.name || student.email || "A student"
           } has joined your group "${group.name}".`,
           date: new Date(),
-          link: `/create-group/${group.admin}`, // or a group management page
+          link: `/create-group/${group.admin}`,
         });
 
-        // 6) return updated group
         const updated = await groupsCollection.findOne({
           _id: new ObjectId(groupId),
         });
@@ -1905,12 +1774,11 @@ async function run() {
       }
     });
 
-    // Search papers from arXiv
     app.get("/search-papers", async (req, res) => {
       const { q, start } = req.query;
-      const query = q || "computer science"; // default keyword
+      const query = q || "computer science"; 
       const startIndex = parseInt(start) || 0;
-      const max_results = 50; // smaller number for testing
+      const max_results = 50; 
 
       try {
         const response = await axios.get(
@@ -1939,7 +1807,7 @@ async function run() {
         res.status(500).json({ error: "Failed to fetch papers from arXiv" });
       }
     });
-    // Get 5 random papers
+
     app.get("/random-papers", async (req, res) => {
       try {
         const response = await axios.get(
@@ -1959,7 +1827,6 @@ async function run() {
             link: paper.id[0],
           }));
 
-          // Pick 5 random papers
           const shuffled = formatted.sort(() => 0.5 - Math.random());
           const randomFive = shuffled.slice(0, 5);
 
@@ -1971,17 +1838,15 @@ async function run() {
       }
     });
 
-    // Add a paper to bookmarks
     app.post("/users/:id/bookmarks", async (req, res) => {
       const { id } = req.params;
       if (!ObjectId.isValid(id)) {
         return res.status(400).send({ message: "Invalid user id" });
       }
 
-      const paper = req.body; // expects {paperId, title, authors, summary, link}
+      const paper = req.body;
 
       try {
-        // Prevent duplicates
         const user = await userCollection.findOne({ _id: new ObjectId(id) });
         if (!user) return res.status(404).send({ message: "User not found" });
 
@@ -2004,7 +1869,6 @@ async function run() {
       }
     });
 
-    // Get all bookmarks for a user
     app.get("/users/:id/bookmarks", async (req, res) => {
       const { id } = req.params;
       if (!ObjectId.isValid(id)) {
@@ -2022,10 +1886,8 @@ async function run() {
       }
     });
 
-    // Remove a bookmarked paper
     app.delete("/users/:id/bookmarks/:paperId", async (req, res) => {
       const { id } = req.params;
-      // paperId may contain slashes, so get it from req.params with decodeURIComponent
       const paperId = decodeURIComponent(req.params.paperId);
 
       if (!ObjectId.isValid(id))
@@ -2050,7 +1912,6 @@ async function run() {
       }
     });
 
-    // Recommend a paper to a group
     app.post("/groups/:groupId/recommend-paper", async (req, res) => {
       try {
         const { groupId } = req.params;
@@ -2059,8 +1920,6 @@ async function run() {
         if (!ObjectId.isValid(groupId) || !ObjectId.isValid(supervisorId)) {
           return res.status(400).json({ message: "Invalid id(s)" });
         }
-
-        // basic paper validation
         const { paperId, title, authors, summary, link } = paper || {};
         if (!paperId || !title || !link) {
           return res
@@ -2068,20 +1927,16 @@ async function run() {
             .json({ message: "paperId, title, and link are required" });
         }
 
-        // Load group
         const group = await groupsCollection.findOne({
           _id: new ObjectId(groupId),
         });
         if (!group) return res.status(404).json({ message: "Group not found" });
 
-        // Must be this group's assigned supervisor
         if (String(group.assignedSupervisor) !== String(supervisorId)) {
           return res
             .status(403)
             .json({ message: "Not authorized to recommend to this group" });
         }
-
-        // Avoid duplicates by paperId
         const already = await groupsCollection.findOne({
           _id: new ObjectId(groupId),
           "recommendedFeatures.paperId": paperId,
@@ -2132,12 +1987,9 @@ async function run() {
       }
     });
 
-    // POST /meetings - Create a new meeting
     app.post("/meetings", async (req, res) => {
       try {
         const { title, date, time, groupId, meetingLink, supervisorId } = req.body;
-
-        // Validation
         if (!title || !date || !time || !groupId || !supervisorId) {
           return res.status(400).send({ 
             message: "Title, date, time, groupId, and supervisorId are required" 
@@ -2147,8 +1999,6 @@ async function run() {
         if (!ObjectId.isValid(groupId) || !ObjectId.isValid(supervisorId)) {
           return res.status(400).send({ message: "Invalid groupId or supervisorId" });
         }
-
-        // Verify supervisor and group relationship
         const group = await groupsCollection.findOne({
           _id: new ObjectId(groupId),
           assignedSupervisor: new ObjectId(supervisorId)
@@ -2160,7 +2010,6 @@ async function run() {
           });
         }
 
-        // Create meeting
         const meeting = {
           title: title.trim(),
           date,
@@ -2169,13 +2018,12 @@ async function run() {
           supervisorId: new ObjectId(supervisorId),
           meetingLink: meetingLink?.trim() || null,
           createdAt: new Date(),
-          status: "scheduled" // scheduled, completed, cancelled
+          status: "scheduled"
         };
 
         const result = await meetingsCollection.insertOne(meeting);
         const createdMeeting = await meetingsCollection.findOne({ _id: result.insertedId });
 
-        // Notify group members
         const memberIds = (group.members || []).map(m => new ObjectId(m));
         const supervisor = await userCollection.findOne({ _id: new ObjectId(supervisorId) });
         
@@ -2196,7 +2044,7 @@ async function run() {
       }
     });
 
-    // GET /meetings - Fetch meetings
+
     app.get("/meetings", async (req, res) => {
       try {
         const { supervisorId, groupId, studentId } = req.query;
@@ -2221,7 +2069,6 @@ async function run() {
             return res.status(400).send({ message: "Invalid studentId" });
           }
           
-          // Find groups where this student is a member
           const studentGroups = await groupsCollection.find({
             members: new ObjectId(studentId)
           }).toArray();
@@ -2232,10 +2079,8 @@ async function run() {
 
         const meetings = await meetingsCollection
           .find(filter)
-          .sort({ date: 1, time: 1 }) // Sort by upcoming meetings first
+          .sort({ date: 1, time: 1 })
           .toArray();
-
-        // Populate group and supervisor info
         const enrichedMeetings = await Promise.all(
           meetings.map(async (meeting) => {
             const group = await groupsCollection.findOne({ _id: meeting.groupId });
@@ -2259,7 +2104,6 @@ async function run() {
       }
     });
 
-    // PUT /meetings/:id - Update a meeting
     app.put("/meetings/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -2268,14 +2112,11 @@ async function run() {
         if (!ObjectId.isValid(id) || !ObjectId.isValid(supervisorId)) {
           return res.status(400).send({ message: "Invalid id(s)" });
         }
-
-        // Validation
         if (!title || !date || !time || !groupId) {
           return res.status(400).send({ 
             message: "Title, date, time, and groupId are required" 
           });
         }
-
         if (!ObjectId.isValid(groupId)) {
           return res.status(400).send({ message: "Invalid groupId" });
         }
@@ -2285,14 +2126,12 @@ async function run() {
           return res.status(404).send({ message: "Meeting not found" });
         }
 
-        // Verify supervisor authorization
         if (String(meeting.supervisorId) !== String(supervisorId)) {
           return res.status(403).send({ 
             message: "Not authorized to update this meeting" 
           });
         }
 
-        // Verify supervisor and group relationship
         const group = await groupsCollection.findOne({
           _id: new ObjectId(groupId),
           assignedSupervisor: new ObjectId(supervisorId)
@@ -2304,7 +2143,6 @@ async function run() {
           });
         }
 
-        // Update meeting
         const updateData = {
           title: title.trim(),
           date,
@@ -2325,7 +2163,6 @@ async function run() {
 
         const updatedMeeting = await meetingsCollection.findOne({ _id: new ObjectId(id) });
 
-        // Notify group members about the update
         const memberIds = (group.members || []).map(m => new ObjectId(m));
         const supervisor = await userCollection.findOne({ _id: new ObjectId(supervisorId) });
         
@@ -2346,7 +2183,6 @@ async function run() {
       }
     });
 
-    // DELETE /meetings/:id - Delete a meeting
     app.delete("/meetings/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -2360,15 +2196,12 @@ async function run() {
         if (!meeting) {
           return res.status(404).send({ message: "Meeting not found" });
         }
-
-        // Verify supervisor authorization
         if (String(meeting.supervisorId) !== String(supervisorId)) {
           return res.status(403).send({ 
             message: "Not authorized to delete this meeting" 
           });
         }
 
-        // Get group info for notifications
         const group = await groupsCollection.findOne({ _id: meeting.groupId });
         
         const result = await meetingsCollection.deleteOne({ _id: new ObjectId(id) });
@@ -2377,7 +2210,6 @@ async function run() {
           return res.status(404).send({ message: "Meeting not found" });
         }
 
-        // Notify group members about the deletion
         if (group) {
           const memberIds = (group.members || []).map(m => new ObjectId(m));
           const supervisor = await userCollection.findOne({ _id: new ObjectId(supervisorId) });
@@ -2399,7 +2231,6 @@ async function run() {
       }
     });
 
-    // PATCH /meetings/:id/status - Update meeting status (complete, cancel, etc.)
     app.patch("/meetings/:id/status", async (req, res) => {
       try {
         const { id } = req.params;
@@ -2420,7 +2251,6 @@ async function run() {
           return res.status(404).send({ message: "Meeting not found" });
         }
 
-        // Verify supervisor authorization
         if (String(meeting.supervisorId) !== String(supervisorId)) {
           return res.status(403).send({ 
             message: "Not authorized to update this meeting" 
