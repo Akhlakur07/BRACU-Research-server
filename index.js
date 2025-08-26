@@ -2279,6 +2279,64 @@ async function run() {
       }
     });
 
+    // Get all theses (for all users)
+app.get("/theses", async (req, res) => {
+  try {
+    const { status } = req.query;
+    const filter = {};
+    if (status) filter.status = status; // allow filtering
+
+    const theses = await proposalsCollection.aggregate([
+      { $match: filter },
+      {
+        $lookup: {
+          from: "users",
+          localField: "supervisor",
+          foreignField: "_id",
+          as: "supervisorInfo"
+        }
+      },
+      {
+        $lookup: {
+          from: "groups",
+          localField: "groupId",
+          foreignField: "_id",
+          as: "groupInfo"
+        }
+      },
+      { $unwind: "$groupInfo" },
+      {
+        $lookup: {
+          from: "users",
+          localField: "groupInfo.members",
+          foreignField: "_id",
+          as: "studentMembers"
+        }
+      },
+      {
+        $project: {
+          title: 1,
+          status: 1,
+          createdAt: 1,
+          domain: 1, // <--- include domain
+          supervisor: { $arrayElemAt: ["$supervisorInfo", 0] },
+          students: "$studentMembers",
+          groupName: "$groupInfo.name"
+        }
+      },
+      { $sort: { createdAt: -1 } }
+    ]).toArray();
+
+    res.status(200).send(theses);
+  } catch (err) {
+    console.error("GET /theses error:", err);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+
+    
+
     await client.db("admin").command({ ping: 1 });
     console.log("Connected to MongoDB");
   } catch (error) {
