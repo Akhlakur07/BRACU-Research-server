@@ -807,6 +807,98 @@ async function run() {
       }
     });
 
+    app.patch("/proposals/:id/decision", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { supervisorId, decision } = req.body || {};
+
+        if (!ObjectId.isValid(id) || !ObjectId.isValid(supervisorId)) {
+          return res.status(400).send({ message: "Invalid id(s)" });
+        }
+        if (!["approve", "reject"].includes(String(decision))) {
+          return res.status(400).send({ message: "Decision must be 'approve' or 'reject'" });
+        }
+
+        const proposal = await proposalsCollection.findOne({ _id: new ObjectId(id) });
+        if (!proposal) return res.status(404).send({ message: "Proposal not found" });
+
+        if (String(proposal.supervisor) !== String(supervisorId)) {
+          return res.status(403).send({ message: "Not authorized to decide this proposal" });
+        }
+
+        if (proposal.status !== "Pending") {
+          return res.status(409).send({ message: "Proposal has already been decided" });
+        }
+
+        let newFields = {
+          status: decision === "approve" ? "Approved" : "Rejected",
+          supervisorapproved: decision === "approve",
+          decidedAt: new Date(),
+        };
+
+        if (decision === "approve" && ObjectId.isValid(proposal.groupId)) {
+          await groupsCollection.updateOne(
+            { _id: new ObjectId(proposal.groupId) },
+            { $set: { assignedSupervisor: new ObjectId(supervisorId) } }
+          );
+          await proposalsCollection.deleteMany({
+            groupId: new ObjectId(proposal.groupId),
+            _id: { $ne: new ObjectId(id) },
+          });
+        }
+
+        await proposalsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: newFields }
+        );
+
+        const updated = await proposalsCollection.findOne({ _id: new ObjectId(id) });
+        res.send({ success: true, proposal: updated });
+      } catch (err) {
+        console.error("PATCH /proposals/:id/decision error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // PATCH: Supervisor feedback (new)
+    app.patch("/proposals/:id/feedback", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { supervisorId, text } = req.body || {};
+
+        if (!ObjectId.isValid(id) || !ObjectId.isValid(supervisorId)) {
+          return res.status(400).send({ message: "Invalid id(s)" });
+        }
+        if (!text || !text.trim()) {
+          return res.status(400).send({ message: "Feedback cannot be empty" });
+        }
+
+        const proposal = await proposalsCollection.findOne({ _id: new ObjectId(id) });
+        if (!proposal) return res.status(404).send({ message: "Proposal not found" });
+
+        if (String(proposal.supervisor) !== String(supervisorId)) {
+          return res.status(403).send({ message: "Not authorized to give feedback" });
+        }
+
+        const feedbackEntry = {
+          text: text.trim(),
+          date: new Date(),
+        };
+
+        await proposalsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $push: { feedback: feedbackEntry } }
+        );
+
+        const updated = await proposalsCollection.findOne({ _id: new ObjectId(id) });
+        res.send({ success: true, proposal: updated });
+      } catch (err) {
+        console.error("PATCH /proposals/:id/feedback error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+
     app.post("/faqs", async (req, res) => {
       try {
         const { question, answer } = req.body;
@@ -845,106 +937,6 @@ async function run() {
       }
     });
 
-    app.patch("/proposals/:id/decision", async (req, res) => {
-      try {
-        const { id } = req.params;
-        const { supervisorId, decision } = req.body || {};
-
-        if (!ObjectId.isValid(id) || !ObjectId.isValid(supervisorId)) {
-          return res.status(400).send({ message: "Invalid id(s)" });
-        }
-        if (!["approve", "reject"].includes(String(decision))) {
-          return res
-            .status(400)
-            .send({ message: "Decision must be 'approve' or 'reject'" });
-        }
-
-        const proposal = await proposalsCollection.findOne({
-          _id: new ObjectId(id),
-        });
-        if (!proposal)
-          return res.status(404).send({ message: "Proposal not found" });
-
-        if (String(proposal.supervisor) !== String(supervisorId)) {
-          return res
-            .status(403)
-            .send({ message: "Not authorized to decide this proposal" });
-        }
-
-        if (proposal.status !== "Pending") {
-          return res
-            .status(409)
-            .send({ message: "Proposal has already been decided" });
-        }
-
-        let newFields = {
-          status: decision === "approve" ? "Approved" : "Rejected",
-          supervisorapproved: decision === "approve",
-          decidedAt: new Date(),
-        };
-
-        if (decision === "approve" && ObjectId.isValid(proposal.groupId)) {
-          await groupsCollection.updateOne(
-            { _id: new ObjectId(proposal.groupId) },
-            { $set: { assignedSupervisor: new ObjectId(supervisorId) } }
-          );
-          await proposalsCollection.deleteMany({
-            groupId: new ObjectId(proposal.groupId),
-            _id: { $ne: new ObjectId(id) }, 
-          });
-        }
-
-        await proposalsCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: newFields }
-        );
-
-        if (ObjectId.isValid(proposal.groupId)) {
-          const group = await groupsCollection.findOne({
-            _id: new ObjectId(proposal.groupId),
-          });
-
-          if (group?.members?.length > 0) {
-            const supervisor = await userCollection.findOne({
-              _id: new ObjectId(supervisorId),
-            });
-
-            const notification = {
-              message:
-                decision === "approve"
-                  ? `Your thesis proposal "${
-                      proposal.title
-                    }" has been approved by ${
-                      supervisor?.name || "Supervisor"
-                    }.`
-                  : `Your thesis proposal "${
-                      proposal.title
-                    }" has been rejected by ${
-                      supervisor?.name || "Supervisor"
-                    }.`,
-              date: new Date(),
-              link: `/proposals/${proposal._id}`,
-            };
-
-            await userCollection.updateMany(
-              { _id: { $in: group.members.map((m) => new ObjectId(m)) } },
-              {
-                $push: { notifications: notification },
-                $set: { isSeen: false },
-              }
-            );
-          }
-        }
-
-        const updated = await proposalsCollection.findOne({
-          _id: new ObjectId(id),
-        });
-        res.send({ success: true, proposal: updated });
-      } catch (err) {
-        console.error("PATCH /proposals/:id/decision error:", err);
-        res.status(500).send({ message: "Internal server error" });
-      }
-    });
 
     app.patch("/admin/assign-supervisor", async (req, res) => {
       try {
@@ -2279,60 +2271,60 @@ async function run() {
       }
     });
 
-    // Get all theses (for all users)
-app.get("/theses", async (req, res) => {
-  try {
-    const { status } = req.query;
-    const filter = {};
-    if (status) filter.status = status; // allow filtering
+        // Get all theses (for all users)
+    app.get("/theses", async (req, res) => {
+      try {
+        const { status } = req.query;
+        const filter = {};
+        if (status) filter.status = status; // allow filtering
 
-    const theses = await proposalsCollection.aggregate([
-      { $match: filter },
-      {
-        $lookup: {
-          from: "users",
-          localField: "supervisor",
-          foreignField: "_id",
-          as: "supervisorInfo"
-        }
-      },
-      {
-        $lookup: {
-          from: "groups",
-          localField: "groupId",
-          foreignField: "_id",
-          as: "groupInfo"
-        }
-      },
-      { $unwind: "$groupInfo" },
-      {
-        $lookup: {
-          from: "users",
-          localField: "groupInfo.members",
-          foreignField: "_id",
-          as: "studentMembers"
-        }
-      },
-      {
-        $project: {
-          title: 1,
-          status: 1,
-          createdAt: 1,
-          domain: 1, // <--- include domain
-          supervisor: { $arrayElemAt: ["$supervisorInfo", 0] },
-          students: "$studentMembers",
-          groupName: "$groupInfo.name"
-        }
-      },
-      { $sort: { createdAt: -1 } }
-    ]).toArray();
+        const theses = await proposalsCollection.aggregate([
+          { $match: filter },
+          {
+            $lookup: {
+              from: "users",
+              localField: "supervisor",
+              foreignField: "_id",
+              as: "supervisorInfo"
+            }
+          },
+          {
+            $lookup: {
+              from: "groups",
+              localField: "groupId",
+              foreignField: "_id",
+              as: "groupInfo"
+            }
+          },
+          { $unwind: "$groupInfo" },
+          {
+            $lookup: {
+              from: "users",
+              localField: "groupInfo.members",
+              foreignField: "_id",
+              as: "studentMembers"
+            }
+          },
+          {
+            $project: {
+              title: 1,
+              status: 1,
+              createdAt: 1,
+              domain: 1, // <--- include domain
+              supervisor: { $arrayElemAt: ["$supervisorInfo", 0] },
+              students: "$studentMembers",
+              groupName: "$groupInfo.name"
+            }
+          },
+          { $sort: { createdAt: -1 } }
+        ]).toArray();
 
-    res.status(200).send(theses);
-  } catch (err) {
-    console.error("GET /theses error:", err);
-    res.status(500).send({ message: "Internal server error" });
-  }
-});
+        res.status(200).send(theses);
+      } catch (err) {
+        console.error("GET /theses error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
 
 
     
