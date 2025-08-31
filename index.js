@@ -46,6 +46,26 @@ async function run() {
       res.send(result);
     });
 
+    await groupsCollection.createIndex(
+      { assignedSupervisor: 1, startingSemester: 1 },
+      { name: "cap_count_idx" }
+    );
+
+    // run once
+    await groupsCollection.updateMany(
+      {
+        startingSemester: { $exists: false },
+        "startingSemesterInfo._id": { $type: "objectId" },
+      },
+      [
+        {
+          $set: {
+            startingSemester: "$startingSemesterInfo._id",
+          },
+        },
+      ]
+    );
+
     //Get all users
     app.get("/users", async (req, res) => {
       const { role } = req.query;
@@ -417,6 +437,7 @@ async function run() {
           assignedSupervisor: null,
           proposalsSubmittedTo: [],
           maxMembers: 5,
+          startingSemester: null,
         };
         const existing = await groupsCollection.findOne({
           admin: new ObjectId(adminId),
@@ -450,6 +471,7 @@ async function run() {
             assignedSupervisor: 1,
             proposalsSubmittedTo: 1,
             maxMembers: 1,
+            startingSemester: 1,
           })
           .toArray();
         res.send(groups);
@@ -478,6 +500,7 @@ async function run() {
               assignedSupervisor: 1,
               proposalsSubmittedTo: 1,
               maxMembers: 1,
+              startingSemester: 1,
             },
           }
         );
@@ -808,10 +831,12 @@ async function run() {
       }
     });
 
+    // Cap: a supervisor can approve at most 8 groups in a given semester
     app.patch("/proposals/:id/decision", async (req, res) => {
+      const session = client.startSession();
       try {
         const { id } = req.params;
-        const { supervisorId, decision } = req.body || {};
+        const { supervisorId, decision, semesterId } = req.body || {};
 
         if (!ObjectId.isValid(id) || !ObjectId.isValid(supervisorId)) {
           return res.status(400).send({ message: "Invalid id(s)" });
@@ -822,53 +847,231 @@ async function run() {
             .send({ message: "Decision must be 'approve' or 'reject'" });
         }
 
-        const proposal = await proposalsCollection.findOne({
-          _id: new ObjectId(id),
-        });
-        if (!proposal)
-          return res.status(404).send({ message: "Proposal not found" });
-
-        if (String(proposal.supervisor) !== String(supervisorId)) {
-          return res
-            .status(403)
-            .send({ message: "Not authorized to decide this proposal" });
-        }
-
-        if (proposal.status !== "Pending") {
-          return res
-            .status(409)
-            .send({ message: "Proposal has already been decided" });
-        }
-
-        let newFields = {
-          status: decision === "approve" ? "Approved" : "Rejected",
-          supervisorapproved: decision === "approve",
-          decidedAt: new Date(),
-        };
-
-        if (decision === "approve" && ObjectId.isValid(proposal.groupId)) {
-          await groupsCollection.updateOne(
-            { _id: new ObjectId(proposal.groupId) },
-            { $set: { assignedSupervisor: new ObjectId(supervisorId) } }
-          );
-          await proposalsCollection.deleteMany({
-            groupId: new ObjectId(proposal.groupId),
-            _id: { $ne: new ObjectId(id) },
+        // fast path for reject (no transaction needed)
+        if (decision === "reject") {
+          const proposal = await proposalsCollection.findOne({
+            _id: new ObjectId(id),
           });
+          if (!proposal)
+            return res.status(404).send({ message: "Proposal not found" });
+          if (String(proposal.supervisor) !== String(supervisorId)) {
+            return res
+              .status(403)
+              .send({ message: "Not authorized to decide this proposal" });
+          }
+          if (proposal.status !== "Pending") {
+            return res
+              .status(409)
+              .send({ message: "Proposal has already been decided" });
+          }
+          await proposalsCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+              $set: {
+                status: "Rejected",
+                supervisorapproved: false,
+                decidedAt: new Date(),
+              },
+            }
+          );
+          const updated = await proposalsCollection.findOne({
+            _id: new ObjectId(id),
+          });
+          return res.send({ success: true, proposal: updated });
         }
 
-        await proposalsCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: newFields }
+        // decision === 'approve'
+        if (!ObjectId.isValid(semesterId)) {
+          return res
+            .status(400)
+            .send({ message: "semesterId is required for approval" });
+        }
+
+        let updatedProposal = null;
+
+        await session.withTransaction(
+          async () => {
+            // 1) Load proposal (transactional)
+            const proposal = await proposalsCollection.findOne(
+              { _id: new ObjectId(id) },
+              { session }
+            );
+            if (!proposal) throw new Error("NOT_FOUND::Proposal not found");
+            if (String(proposal.supervisor) !== String(supervisorId))
+              throw new Error(
+                "FORBIDDEN::Not authorized to decide this proposal"
+              );
+            if (proposal.status !== "Pending")
+              throw new Error("CONFLICT::Proposal has already been decided");
+
+            // 2) Load group & semester
+            if (!ObjectId.isValid(proposal.groupId))
+              throw new Error("BAD_REQUEST::Invalid groupId on proposal");
+
+            const [group, semester] = await Promise.all([
+              groupsCollection.findOne(
+                { _id: new ObjectId(proposal.groupId) },
+                { session }
+              ),
+              semestersCollection.findOne(
+                { _id: new ObjectId(semesterId) },
+                { session }
+              ),
+            ]);
+            if (!group) throw new Error("NOT_FOUND::Group not found");
+            if (!semester) throw new Error("NOT_FOUND::Semester not found");
+
+            if (group.assignedSupervisor) {
+              throw new Error(
+                "FORBIDDEN::This group already has an assigned supervisor. You cannot approve another proposal."
+              );
+            }
+
+            // 3) Enforce cap (count groups with either exact id field or snapshot id)
+            const capFilter = {
+              assignedSupervisor: new ObjectId(supervisorId),
+              $or: [
+                { startingSemester: new ObjectId(semesterId) },
+                { "startingSemesterInfo._id": new ObjectId(semesterId) },
+              ],
+            };
+            const currentCount = await groupsCollection.countDocuments(
+              capFilter,
+              { session }
+            );
+            if (currentCount >= 8) {
+              throw new Error(
+                "CAP_REACHED::Approval limit reached: a supervisor can supervise at most 8 groups in a single semester."
+              );
+            }
+
+            // 4) Assign supervisor & semester to the group
+            await groupsCollection.updateOne(
+              { _id: new ObjectId(proposal.groupId) },
+              {
+                $set: {
+                  assignedSupervisor: new ObjectId(supervisorId),
+                  startingSemester: new ObjectId(semesterId),
+                  startingSemesterInfo: {
+                    _id: new ObjectId(semesterId),
+                    season: String(semester.season).toLowerCase(),
+                    year: semester.year,
+                    startDate: semester.startDate,
+                    endDate: semester.endDate,
+                  },
+                },
+              },
+              { session }
+            );
+
+            // 5) Approve the proposal
+            await proposalsCollection.updateOne(
+              { _id: new ObjectId(id) },
+              {
+                $set: {
+                  status: "Approved",
+                  supervisorapproved: true,
+                  decidedAt: new Date(),
+                },
+              },
+              { session }
+            );
+
+            // 6) Remove other proposals from this group
+            await proposalsCollection.deleteMany(
+              {
+                groupId: new ObjectId(proposal.groupId),
+                _id: { $ne: new ObjectId(id) },
+              },
+              { session }
+            );
+
+            // 7) Double-check after write (prevents concurrent overrun)
+            const postCount = await groupsCollection.countDocuments(capFilter, {
+              session,
+            });
+            if (postCount > 8) {
+              // Trigger rollback by throwing
+              throw new Error(
+                "CAP_REACHED::Concurrent approval exceeded the 8-group cap for this semester."
+              );
+            }
+
+            updatedProposal = await proposalsCollection.findOne(
+              { _id: new ObjectId(id) },
+              { session }
+            );
+          },
+          {
+            readConcern: { level: "snapshot" },
+            writeConcern: { w: "majority" },
+            readPreference: "primary",
+          }
         );
 
-        const updated = await proposalsCollection.findOne({
-          _id: new ObjectId(id),
-        });
-        res.send({ success: true, proposal: updated });
+        // Best-effort notifications (outside the transaction)
+        try {
+          const fresh = await proposalsCollection.findOne({
+            _id: new ObjectId(id),
+          });
+          const grp = await groupsCollection.findOne({
+            _id: new ObjectId(fresh.groupId),
+          });
+          const sup = await userCollection.findOne({
+            _id: new ObjectId(supervisorId),
+          });
+          const sem = await semestersCollection.findOne({
+            _id: new ObjectId(semesterId),
+          });
+
+          const supName = sup?.name || sup?.email || "Supervisor";
+          const memberIds = (grp?.members || []).map((m) => new ObjectId(m));
+
+          await pushNotificationsToUsers(memberIds, {
+            message: `Your proposal "${
+              fresh.title
+            }" was approved by ${supName}. Starting semester: ${String(
+              sem.season
+            )
+              .charAt(0)
+              .toUpperCase()}${String(sem.season).slice(1)} ${sem.year}.`,
+            date: new Date(),
+            link: `/student-dashboard`,
+          });
+
+          await pushNotificationsToUsers([new ObjectId(supervisorId)], {
+            message: `You approved group "${
+              grp?.name || "Unnamed"
+            }" for ${String(sem.season).charAt(0).toUpperCase()}${String(
+              sem.season
+            ).slice(1)} ${sem.year}.`,
+            date: new Date(),
+            link: `/supervisor-dashboard`,
+          });
+        } catch (e) {
+          console.error("Notifications failed:", e);
+        }
+
+        return res.send({ success: true, proposal: updatedProposal });
       } catch (err) {
         console.error("PATCH /proposals/:id/decision error:", err);
-        res.status(500).send({ message: "Internal server error" });
+
+        // Unpack our error signals
+        const msg = String(err.message || "");
+        if (msg.startsWith("NOT_FOUND::"))
+          return res.status(404).send({ message: msg.split("::")[1] });
+        if (msg.startsWith("FORBIDDEN::"))
+          return res.status(403).send({ message: msg.split("::")[1] });
+        if (msg.startsWith("CONFLICT::"))
+          return res.status(409).send({ message: msg.split("::")[1] });
+        if (msg.startsWith("BAD_REQUEST::"))
+          return res.status(400).send({ message: msg.split("::")[1] });
+        if (msg.startsWith("CAP_REACHED::"))
+          return res.status(409).send({ message: msg.split("::")[1] });
+
+        return res.status(500).send({ message: "Internal server error" });
+      } finally {
+        await session.endSession();
       }
     });
 
@@ -2617,6 +2820,29 @@ async function run() {
         res.status(200).send(theses);
       } catch (err) {
         console.error("GET /theses error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // Get upcoming semesters only (hide current and past).
+    // "Current" per your rule: today's date >= semester.startDate
+    app.get("/semesters/upcoming", async (req, res) => {
+      try {
+        // Build a local-date (not UTC) YYYY-MM-DD string to avoid TZ off-by-one
+        const now = new Date();
+        const yyyy = now.getFullYear();
+        const mm = String(now.getMonth() + 1).padStart(2, "0");
+        const dd = String(now.getDate()).padStart(2, "0");
+        const todayStr = `${yyyy}-${mm}-${dd}`;
+
+        const semesters = await semestersCollection
+          .find({ startDate: { $gt: todayStr } })
+          .sort({ startDate: 1 }) // earliest upcoming first
+          .toArray();
+
+        res.send(semesters);
+      } catch (err) {
+        console.error("GET /semesters/upcoming error:", err);
         res.status(500).send({ message: "Internal server error" });
       }
     });
