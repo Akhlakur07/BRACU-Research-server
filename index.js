@@ -32,6 +32,7 @@ async function run() {
     const groupsCollection = db.collection("groups");
     const faqsCollection = db.collection("faqs");
     const meetingsCollection = db.collection("meetings");
+    const semestersCollection = db.collection("semesters");
 
     //register user
     app.post("/users", async (req, res) => {
@@ -52,7 +53,7 @@ async function run() {
       const result = await userCollection.find(filter).toArray();
       res.send(result);
     });
-    
+
     // Get single user by ObjectId
     app.get("/users/:id", async (req, res) => {
       const { id } = req.params;
@@ -227,7 +228,7 @@ async function run() {
 
         const supervisor = await userCollection.findOne(
           { _id: new ObjectId(id), role: "supervisor" },
-          { projection: { password: 0 } } 
+          { projection: { password: 0 } }
         );
 
         if (!supervisor) {
@@ -509,80 +510,80 @@ async function run() {
       }
     });
 
-    app.post("/groups", async (req, res) => {
-      try {
-        const { name, adminId, researchInterests } = req.body || {};
+    // app.post("/groups", async (req, res) => {
+    //   try {
+    //     const { name, adminId, researchInterests } = req.body || {};
 
-        if (typeof name !== "string" || !name.trim()) {
-          return res.status(400).send({ message: "Group name is required" });
-        }
-        if (!ObjectId.isValid(adminId)) {
-          return res.status(400).send({ message: "Invalid adminId" });
-        }
-        if (
-          !Array.isArray(researchInterests) ||
-          researchInterests.length === 0
-        ) {
-          return res
-            .status(400)
-            .send({ message: "At least one research interest is required" });
-        }
+    //     if (typeof name !== "string" || !name.trim()) {
+    //       return res.status(400).send({ message: "Group name is required" });
+    //     }
+    //     if (!ObjectId.isValid(adminId)) {
+    //       return res.status(400).send({ message: "Invalid adminId" });
+    //     }
+    //     if (
+    //       !Array.isArray(researchInterests) ||
+    //       researchInterests.length === 0
+    //     ) {
+    //       return res
+    //         .status(400)
+    //         .send({ message: "At least one research interest is required" });
+    //     }
 
-        const admin = await userCollection.findOne({
-          _id: new ObjectId(adminId),
-          role: "student",
-        });
-        if (!admin) {
-          return res.status(404).send({ message: "Admin (student) not found" });
-        }
+    //     const admin = await userCollection.findOne({
+    //       _id: new ObjectId(adminId),
+    //       role: "student",
+    //     });
+    //     if (!admin) {
+    //       return res.status(404).send({ message: "Admin (student) not found" });
+    //     }
 
-        const existingAsAdmin = await groupsCollection.findOne({
-          admin: new ObjectId(adminId),
-        });
-        if (existingAsAdmin) {
-          return res
-            .status(409)
-            .send({ message: "You have already created a group." });
-        }
+    //     const existingAsAdmin = await groupsCollection.findOne({
+    //       admin: new ObjectId(adminId),
+    //     });
+    //     if (existingAsAdmin) {
+    //       return res
+    //         .status(409)
+    //         .send({ message: "You have already created a group." });
+    //     }
 
-        const existingAsMember = await groupsCollection.findOne({
-          members: new ObjectId(adminId),
-        });
-        if (existingAsMember) {
-          return res
-            .status(409)
-            .send({ message: "You already belong to a group." });
-        }
+    //     const existingAsMember = await groupsCollection.findOne({
+    //       members: new ObjectId(adminId),
+    //     });
+    //     if (existingAsMember) {
+    //       return res
+    //         .status(409)
+    //         .send({ message: "You already belong to a group." });
+    //     }
 
-        const normInterests = Array.from(
-          new Set(
-            researchInterests
-              .filter((x) => typeof x === "string")
-              .map((x) => x.trim())
-              .filter(Boolean)
-          )
-        );
+    //     const normInterests = Array.from(
+    //       new Set(
+    //         researchInterests
+    //           .filter((x) => typeof x === "string")
+    //           .map((x) => x.trim())
+    //           .filter(Boolean)
+    //       )
+    //     );
 
-        const doc = {
-          name: name.trim(),
-          admin: new ObjectId(adminId),
-          members: [new ObjectId(adminId)],
-          researchInterests: normInterests,
-          assignedSupervisor: null,
-          proposalsSubmittedTo: [],
-          maxMembers: 5,
-        };
+    //     const doc = {
+    //       name: name.trim(),
+    //       admin: new ObjectId(adminId),
+    //       members: [new ObjectId(adminId)],
+    //       researchInterests: normInterests,
+    //       assignedSupervisor: null,
+    //       proposalsSubmittedTo: [],
+    //       maxMembers: 5,
+    //     };
 
-        const result = await groupsCollection.insertOne(doc);
-        const created = await groupsCollection.findOne({
-          _id: result.insertedId,
-        });
-        res.status(201).send({ success: true, group: created });
-      } catch (err) {
-        console.error("POST /groups error:", err);
-        res.status(500).send({ message: "Internal server error" });
-      }
-    });
+    //     const result = await groupsCollection.insertOne(doc);
+    //     const created = await groupsCollection.findOne({
+    //       _id: result.insertedId,
+    //     });
+    //     res.status(201).send({ success: true, group: created });
+    //   } catch (err) {
+    //     console.error("POST /groups error:", err);
+    //     res.status(500).send({ message: "Internal server error" });
+    //   }
+    // });
 
     app.patch("/groups/:groupId/join", async (req, res) => {
       try {
@@ -816,18 +817,27 @@ async function run() {
           return res.status(400).send({ message: "Invalid id(s)" });
         }
         if (!["approve", "reject"].includes(String(decision))) {
-          return res.status(400).send({ message: "Decision must be 'approve' or 'reject'" });
+          return res
+            .status(400)
+            .send({ message: "Decision must be 'approve' or 'reject'" });
         }
 
-        const proposal = await proposalsCollection.findOne({ _id: new ObjectId(id) });
-        if (!proposal) return res.status(404).send({ message: "Proposal not found" });
+        const proposal = await proposalsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (!proposal)
+          return res.status(404).send({ message: "Proposal not found" });
 
         if (String(proposal.supervisor) !== String(supervisorId)) {
-          return res.status(403).send({ message: "Not authorized to decide this proposal" });
+          return res
+            .status(403)
+            .send({ message: "Not authorized to decide this proposal" });
         }
 
         if (proposal.status !== "Pending") {
-          return res.status(409).send({ message: "Proposal has already been decided" });
+          return res
+            .status(409)
+            .send({ message: "Proposal has already been decided" });
         }
 
         let newFields = {
@@ -852,7 +862,9 @@ async function run() {
           { $set: newFields }
         );
 
-        const updated = await proposalsCollection.findOne({ _id: new ObjectId(id) });
+        const updated = await proposalsCollection.findOne({
+          _id: new ObjectId(id),
+        });
         res.send({ success: true, proposal: updated });
       } catch (err) {
         console.error("PATCH /proposals/:id/decision error:", err);
@@ -873,11 +885,16 @@ async function run() {
           return res.status(400).send({ message: "Feedback cannot be empty" });
         }
 
-        const proposal = await proposalsCollection.findOne({ _id: new ObjectId(id) });
-        if (!proposal) return res.status(404).send({ message: "Proposal not found" });
+        const proposal = await proposalsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (!proposal)
+          return res.status(404).send({ message: "Proposal not found" });
 
         if (String(proposal.supervisor) !== String(supervisorId)) {
-          return res.status(403).send({ message: "Not authorized to give feedback" });
+          return res
+            .status(403)
+            .send({ message: "Not authorized to give feedback" });
         }
 
         const feedbackEntry = {
@@ -890,14 +907,15 @@ async function run() {
           { $push: { feedback: feedbackEntry } }
         );
 
-        const updated = await proposalsCollection.findOne({ _id: new ObjectId(id) });
+        const updated = await proposalsCollection.findOne({
+          _id: new ObjectId(id),
+        });
         res.send({ success: true, proposal: updated });
       } catch (err) {
         console.error("PATCH /proposals/:id/feedback error:", err);
         res.status(500).send({ message: "Internal server error" });
       }
     });
-
 
     app.post("/faqs", async (req, res) => {
       try {
@@ -936,7 +954,6 @@ async function run() {
         res.status(500).send({ message: "Internal server error" });
       }
     });
-
 
     app.patch("/admin/assign-supervisor", async (req, res) => {
       try {
@@ -1087,6 +1104,248 @@ async function run() {
         res.send({ success: true, rejected: true, proposalId });
       } catch (err) {
         console.error("PATCH /admin/reject-proposal error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // Create semester
+    app.post("/admin/semesters", async (req, res) => {
+      try {
+        const { season, year, startDate, endDate } = req.body;
+
+        // Validation
+        if (!season || !year || !startDate || !endDate) {
+          return res.status(400).send({ message: "All fields are required" });
+        }
+
+        if (!["spring", "summer", "fall"].includes(season.toLowerCase())) {
+          return res
+            .status(400)
+            .send({ message: "Season must be spring, summer, or fall" });
+        }
+
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        // Cannot create semesters with past start dates
+        if (start < today) {
+          return res
+            .status(400)
+            .send({ message: "Cannot create semesters with past start dates" });
+        }
+
+        // End date must be after start date
+        if (end <= start) {
+          return res
+            .status(400)
+            .send({ message: "End date must be after start date" });
+        }
+
+        // Check duration (3-4 months)
+        const diffTime = Math.abs(end - start);
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        const diffMonths = diffDays / 30.44;
+
+        if (diffMonths < 2.5 || diffMonths > 4.5) {
+          return res
+            .status(400)
+            .send({ message: "Semester duration must be between 3-4 months" });
+        }
+
+        // Check if semester already exists
+        const existing = await semestersCollection.findOne({
+          season: season.toLowerCase(),
+          year: parseInt(year),
+        });
+
+        if (existing) {
+          return res.status(409).send({
+            message: `${
+              season.charAt(0).toUpperCase() + season.slice(1)
+            } ${year} already exists`,
+          });
+        }
+
+        // Check sequential order
+        const allSemesters = await semestersCollection
+          .find({})
+          .sort({ year: -1 })
+          .toArray();
+        if (allSemesters.length > 0) {
+          const latest = allSemesters.reduce((prev, current) => {
+            if (prev.year !== current.year)
+              return prev.year > current.year ? prev : current;
+            const seasonOrder = { spring: 1, summer: 2, fall: 3 };
+            return seasonOrder[prev.season] > seasonOrder[current.season]
+              ? prev
+              : current;
+          });
+
+          const seasonOrder = ["spring", "summer", "fall"];
+          const latestIndex = seasonOrder.indexOf(latest.season);
+          let expectedSeason, expectedYear;
+
+          if (latestIndex === 2) {
+            // fall -> next spring
+            expectedSeason = "spring";
+            expectedYear = latest.year + 1;
+          } else {
+            expectedSeason = seasonOrder[latestIndex + 1];
+            expectedYear = latest.year;
+          }
+
+          if (
+            season.toLowerCase() !== expectedSeason ||
+            parseInt(year) !== expectedYear
+          ) {
+            return res.status(400).send({
+              message: `Next semester should be ${
+                expectedSeason.charAt(0).toUpperCase() + expectedSeason.slice(1)
+              } ${expectedYear}`,
+            });
+          }
+        }
+
+        const semester = {
+          season: season.toLowerCase(),
+          year: parseInt(year),
+          startDate,
+          endDate,
+          createdAt: new Date(),
+        };
+
+        const result = await semestersCollection.insertOne(semester);
+        const created = await semestersCollection.findOne({
+          _id: result.insertedId,
+        });
+
+        res.status(201).send({ success: true, semester: created });
+      } catch (err) {
+        console.error("POST /semesters error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // Get all semesters
+    app.get("/admin/semesters", async (req, res) => {
+      try {
+        const semesters = await semestersCollection
+          .find({})
+          .sort({ year: -1, season: -1 })
+          .toArray();
+        res.send(semesters);
+      } catch (err) {
+        console.error("GET /semesters error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // Update semester
+    app.put("/admin/semesters/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { season, year, startDate, endDate } = req.body;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid semester id" });
+        }
+
+        // Validation
+        if (!season || !year || !startDate || !endDate) {
+          return res.status(400).send({ message: "All fields are required" });
+        }
+
+        if (!["spring", "summer", "fall"].includes(season.toLowerCase())) {
+          return res
+            .status(400)
+            .send({ message: "Season must be spring, summer, or fall" });
+        }
+
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+
+        // End date must be after start date
+        if (end <= start) {
+          return res
+            .status(400)
+            .send({ message: "End date must be after start date" });
+        }
+
+        // Check duration (3-4 months)
+        const diffTime = Math.abs(end - start);
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        const diffMonths = diffDays / 30.44;
+
+        if (diffMonths < 2.5 || diffMonths > 4.5) {
+          return res
+            .status(400)
+            .send({ message: "Semester duration must be between 3-4 months" });
+        }
+
+        // Check if another semester with same season/year exists (excluding current)
+        const existing = await semestersCollection.findOne({
+          season: season.toLowerCase(),
+          year: parseInt(year),
+          _id: { $ne: new ObjectId(id) },
+        });
+
+        if (existing) {
+          return res.status(409).send({
+            message: `${
+              season.charAt(0).toUpperCase() + season.slice(1)
+            } ${year} already exists`,
+          });
+        }
+
+        const updateData = {
+          season: season.toLowerCase(),
+          year: parseInt(year),
+          startDate,
+          endDate,
+          updatedAt: new Date(),
+        };
+
+        const result = await semestersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: "Semester not found" });
+        }
+
+        const updated = await semestersCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        res.send({ success: true, semester: updated });
+      } catch (err) {
+        console.error("PUT /semesters/:id error:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // Delete semester
+    app.delete("/admin/semesters/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid semester id" });
+        }
+
+        const result = await semestersCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+
+        if (result.deletedCount === 0) {
+          return res.status(404).send({ message: "Semester not found" });
+        }
+
+        res.send({ success: true, message: "Semester deleted successfully" });
+      } catch (err) {
+        console.error("DELETE /semesters/:id error:", err);
         res.status(500).send({ message: "Internal server error" });
       }
     });
@@ -1554,7 +1813,7 @@ async function run() {
             student.name || student.email || "A student"
           } requested to join your group "${group.name}".`,
           date: new Date(),
-          link: `/find-group/${group.admin}`, 
+          link: `/find-group/${group.admin}`,
         };
         await pushNotificationsToUsers([group.admin], notification);
 
@@ -1586,7 +1845,7 @@ async function run() {
         const reqItems = pending
           .map((r) => {
             const raw = r.studentId;
-            const sid = typeof raw === "string" ? raw : String(raw); 
+            const sid = typeof raw === "string" ? raw : String(raw);
             const oid = ObjectId.isValid(sid) ? new ObjectId(sid) : null;
             return { sid, oid, requestedAt: r.date || r.requestedAt || null };
           })
@@ -1609,7 +1868,7 @@ async function run() {
           .map((r) => {
             const s = byId[r.sid];
             return {
-              studentId: r.sid, 
+              studentId: r.sid,
               name: s?.name || "Unnamed Student",
               email: s?.email ?? null,
               studentIdStr: s?.studentId ?? null,
@@ -1723,16 +1982,14 @@ async function run() {
           }
         );
 
-        +(
-          (await groupsCollection.updateMany(
-            {},
-            {
-              $pull: {
-                pendingJoinRequests: { studentId: new ObjectId(studentId) },
-              },
-            }
-          ))
-        );
+        +(await groupsCollection.updateMany(
+          {},
+          {
+            $pull: {
+              pendingJoinRequests: { studentId: new ObjectId(studentId) },
+            },
+          }
+        ));
 
         await userCollection.updateOne(
           { _id: new ObjectId(studentId) },
@@ -1768,9 +2025,9 @@ async function run() {
 
     app.get("/search-papers", async (req, res) => {
       const { q, start } = req.query;
-      const query = q || "computer science"; 
+      const query = q || "computer science";
       const startIndex = parseInt(start) || 0;
-      const max_results = 50; 
+      const max_results = 50;
 
       try {
         const response = await axios.get(
@@ -1981,24 +2238,29 @@ async function run() {
 
     app.post("/meetings", async (req, res) => {
       try {
-        const { title, date, time, groupId, meetingLink, supervisorId } = req.body;
+        const { title, date, time, groupId, meetingLink, supervisorId } =
+          req.body;
         if (!title || !date || !time || !groupId || !supervisorId) {
-          return res.status(400).send({ 
-            message: "Title, date, time, groupId, and supervisorId are required" 
+          return res.status(400).send({
+            message:
+              "Title, date, time, groupId, and supervisorId are required",
           });
         }
 
         if (!ObjectId.isValid(groupId) || !ObjectId.isValid(supervisorId)) {
-          return res.status(400).send({ message: "Invalid groupId or supervisorId" });
+          return res
+            .status(400)
+            .send({ message: "Invalid groupId or supervisorId" });
         }
         const group = await groupsCollection.findOne({
           _id: new ObjectId(groupId),
-          assignedSupervisor: new ObjectId(supervisorId)
+          assignedSupervisor: new ObjectId(supervisorId),
         });
 
         if (!group) {
-          return res.status(403).send({ 
-            message: "You are not authorized to schedule meetings for this group" 
+          return res.status(403).send({
+            message:
+              "You are not authorized to schedule meetings for this group",
           });
         }
 
@@ -2010,32 +2272,37 @@ async function run() {
           supervisorId: new ObjectId(supervisorId),
           meetingLink: meetingLink?.trim() || null,
           createdAt: new Date(),
-          status: "scheduled"
+          status: "scheduled",
         };
 
         const result = await meetingsCollection.insertOne(meeting);
-        const createdMeeting = await meetingsCollection.findOne({ _id: result.insertedId });
-
-        const memberIds = (group.members || []).map(m => new ObjectId(m));
-        const supervisor = await userCollection.findOne({ _id: new ObjectId(supervisorId) });
-        
-        await pushNotificationsToUsers(memberIds, {
-          message: `New meeting scheduled: "${title}" on ${date} at ${time} by ${supervisor?.name || 'your supervisor'}`,
-          date: new Date(),
-          link: `/student-dashboard`
+        const createdMeeting = await meetingsCollection.findOne({
+          _id: result.insertedId,
         });
 
-        res.status(201).send({ 
-          success: true, 
+        const memberIds = (group.members || []).map((m) => new ObjectId(m));
+        const supervisor = await userCollection.findOne({
+          _id: new ObjectId(supervisorId),
+        });
+
+        await pushNotificationsToUsers(memberIds, {
+          message: `New meeting scheduled: "${title}" on ${date} at ${time} by ${
+            supervisor?.name || "your supervisor"
+          }`,
+          date: new Date(),
+          link: `/student-dashboard`,
+        });
+
+        res.status(201).send({
+          success: true,
           meeting: createdMeeting,
-          message: "Meeting scheduled successfully" 
+          message: "Meeting scheduled successfully",
         });
       } catch (err) {
         console.error("POST /meetings error:", err);
         res.status(500).send({ message: "Internal server error" });
       }
     });
-
 
     app.get("/meetings", async (req, res) => {
       try {
@@ -2060,12 +2327,14 @@ async function run() {
           if (!ObjectId.isValid(studentId)) {
             return res.status(400).send({ message: "Invalid studentId" });
           }
-          
-          const studentGroups = await groupsCollection.find({
-            members: new ObjectId(studentId)
-          }).toArray();
-          
-          const groupIds = studentGroups.map(g => g._id);
+
+          const studentGroups = await groupsCollection
+            .find({
+              members: new ObjectId(studentId),
+            })
+            .toArray();
+
+          const groupIds = studentGroups.map((g) => g._id);
           filter.groupId = { $in: groupIds };
         }
 
@@ -2075,7 +2344,9 @@ async function run() {
           .toArray();
         const enrichedMeetings = await Promise.all(
           meetings.map(async (meeting) => {
-            const group = await groupsCollection.findOne({ _id: meeting.groupId });
+            const group = await groupsCollection.findOne({
+              _id: meeting.groupId,
+            });
             const supervisor = await userCollection.findOne(
               { _id: meeting.supervisorId },
               { projection: { password: 0 } }
@@ -2084,7 +2355,7 @@ async function run() {
             return {
               ...meeting,
               groupName: group?.name || "Unknown Group",
-              supervisorName: supervisor?.name || "Unknown Supervisor"
+              supervisorName: supervisor?.name || "Unknown Supervisor",
             };
           })
         );
@@ -2099,39 +2370,43 @@ async function run() {
     app.put("/meetings/:id", async (req, res) => {
       try {
         const { id } = req.params;
-        const { title, date, time, groupId, meetingLink, supervisorId } = req.body;
+        const { title, date, time, groupId, meetingLink, supervisorId } =
+          req.body;
 
         if (!ObjectId.isValid(id) || !ObjectId.isValid(supervisorId)) {
           return res.status(400).send({ message: "Invalid id(s)" });
         }
         if (!title || !date || !time || !groupId) {
-          return res.status(400).send({ 
-            message: "Title, date, time, and groupId are required" 
+          return res.status(400).send({
+            message: "Title, date, time, and groupId are required",
           });
         }
         if (!ObjectId.isValid(groupId)) {
           return res.status(400).send({ message: "Invalid groupId" });
         }
 
-        const meeting = await meetingsCollection.findOne({ _id: new ObjectId(id) });
+        const meeting = await meetingsCollection.findOne({
+          _id: new ObjectId(id),
+        });
         if (!meeting) {
           return res.status(404).send({ message: "Meeting not found" });
         }
 
         if (String(meeting.supervisorId) !== String(supervisorId)) {
-          return res.status(403).send({ 
-            message: "Not authorized to update this meeting" 
+          return res.status(403).send({
+            message: "Not authorized to update this meeting",
           });
         }
 
         const group = await groupsCollection.findOne({
           _id: new ObjectId(groupId),
-          assignedSupervisor: new ObjectId(supervisorId)
+          assignedSupervisor: new ObjectId(supervisorId),
         });
 
         if (!group) {
-          return res.status(403).send({ 
-            message: "You are not authorized to schedule meetings for this group" 
+          return res.status(403).send({
+            message:
+              "You are not authorized to schedule meetings for this group",
           });
         }
 
@@ -2141,7 +2416,7 @@ async function run() {
           time,
           groupId: new ObjectId(groupId),
           meetingLink: meetingLink?.trim() || null,
-          updatedAt: new Date()
+          updatedAt: new Date(),
         };
 
         const result = await meetingsCollection.updateOne(
@@ -2153,21 +2428,27 @@ async function run() {
           return res.status(404).send({ message: "Meeting not found" });
         }
 
-        const updatedMeeting = await meetingsCollection.findOne({ _id: new ObjectId(id) });
-
-        const memberIds = (group.members || []).map(m => new ObjectId(m));
-        const supervisor = await userCollection.findOne({ _id: new ObjectId(supervisorId) });
-        
-        await pushNotificationsToUsers(memberIds, {
-          message: `Meeting "${title}" has been updated by ${supervisor?.name || 'your supervisor'}`,
-          date: new Date(),
-          link: `/student-dashboard`
+        const updatedMeeting = await meetingsCollection.findOne({
+          _id: new ObjectId(id),
         });
 
-        res.send({ 
-          success: true, 
+        const memberIds = (group.members || []).map((m) => new ObjectId(m));
+        const supervisor = await userCollection.findOne({
+          _id: new ObjectId(supervisorId),
+        });
+
+        await pushNotificationsToUsers(memberIds, {
+          message: `Meeting "${title}" has been updated by ${
+            supervisor?.name || "your supervisor"
+          }`,
+          date: new Date(),
+          link: `/student-dashboard`,
+        });
+
+        res.send({
+          success: true,
           meeting: updatedMeeting,
-          message: "Meeting updated successfully" 
+          message: "Meeting updated successfully",
         });
       } catch (err) {
         console.error("PUT /meetings/:id error:", err);
@@ -2184,38 +2465,46 @@ async function run() {
           return res.status(400).send({ message: "Invalid id(s)" });
         }
 
-        const meeting = await meetingsCollection.findOne({ _id: new ObjectId(id) });
+        const meeting = await meetingsCollection.findOne({
+          _id: new ObjectId(id),
+        });
         if (!meeting) {
           return res.status(404).send({ message: "Meeting not found" });
         }
         if (String(meeting.supervisorId) !== String(supervisorId)) {
-          return res.status(403).send({ 
-            message: "Not authorized to delete this meeting" 
+          return res.status(403).send({
+            message: "Not authorized to delete this meeting",
           });
         }
 
         const group = await groupsCollection.findOne({ _id: meeting.groupId });
-        
-        const result = await meetingsCollection.deleteOne({ _id: new ObjectId(id) });
+
+        const result = await meetingsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
 
         if (result.deletedCount === 0) {
           return res.status(404).send({ message: "Meeting not found" });
         }
 
         if (group) {
-          const memberIds = (group.members || []).map(m => new ObjectId(m));
-          const supervisor = await userCollection.findOne({ _id: new ObjectId(supervisorId) });
-          
+          const memberIds = (group.members || []).map((m) => new ObjectId(m));
+          const supervisor = await userCollection.findOne({
+            _id: new ObjectId(supervisorId),
+          });
+
           await pushNotificationsToUsers(memberIds, {
-            message: `Meeting "${meeting.title}" has been cancelled by ${supervisor?.name || 'your supervisor'}`,
+            message: `Meeting "${meeting.title}" has been cancelled by ${
+              supervisor?.name || "your supervisor"
+            }`,
             date: new Date(),
-            link: `/student-dashboard`
+            link: `/student-dashboard`,
           });
         }
 
-        res.send({ 
-          success: true, 
-          message: "Meeting deleted successfully" 
+        res.send({
+          success: true,
+          message: "Meeting deleted successfully",
         });
       } catch (err) {
         console.error("DELETE /meetings/:id error:", err);
@@ -2233,29 +2522,31 @@ async function run() {
         }
 
         if (!["scheduled", "completed", "cancelled"].includes(status)) {
-          return res.status(400).send({ 
-            message: "Status must be 'scheduled', 'completed', or 'cancelled'" 
+          return res.status(400).send({
+            message: "Status must be 'scheduled', 'completed', or 'cancelled'",
           });
         }
 
-        const meeting = await meetingsCollection.findOne({ _id: new ObjectId(id) });
+        const meeting = await meetingsCollection.findOne({
+          _id: new ObjectId(id),
+        });
         if (!meeting) {
           return res.status(404).send({ message: "Meeting not found" });
         }
 
         if (String(meeting.supervisorId) !== String(supervisorId)) {
-          return res.status(403).send({ 
-            message: "Not authorized to update this meeting" 
+          return res.status(403).send({
+            message: "Not authorized to update this meeting",
           });
         }
 
         const result = await meetingsCollection.updateOne(
           { _id: new ObjectId(id) },
-          { 
-            $set: { 
+          {
+            $set: {
               status,
-              updatedAt: new Date()
-            }
+              updatedAt: new Date(),
+            },
           }
         );
 
@@ -2263,7 +2554,9 @@ async function run() {
           return res.status(404).send({ message: "Meeting not found" });
         }
 
-        const updatedMeeting = await meetingsCollection.findOne({ _id: new ObjectId(id) });
+        const updatedMeeting = await meetingsCollection.findOne({
+          _id: new ObjectId(id),
+        });
         res.send({ success: true, meeting: updatedMeeting });
       } catch (err) {
         console.error("PATCH /meetings/:id/status error:", err);
@@ -2271,53 +2564,55 @@ async function run() {
       }
     });
 
-        // Get all theses (for all users)
+    // Get all theses (for all users)
     app.get("/theses", async (req, res) => {
       try {
         const { status } = req.query;
         const filter = {};
         if (status) filter.status = status; // allow filtering
 
-        const theses = await proposalsCollection.aggregate([
-          { $match: filter },
-          {
-            $lookup: {
-              from: "users",
-              localField: "supervisor",
-              foreignField: "_id",
-              as: "supervisorInfo"
-            }
-          },
-          {
-            $lookup: {
-              from: "groups",
-              localField: "groupId",
-              foreignField: "_id",
-              as: "groupInfo"
-            }
-          },
-          { $unwind: "$groupInfo" },
-          {
-            $lookup: {
-              from: "users",
-              localField: "groupInfo.members",
-              foreignField: "_id",
-              as: "studentMembers"
-            }
-          },
-          {
-            $project: {
-              title: 1,
-              status: 1,
-              createdAt: 1,
-              domain: 1, // <--- include domain
-              supervisor: { $arrayElemAt: ["$supervisorInfo", 0] },
-              students: "$studentMembers",
-              groupName: "$groupInfo.name"
-            }
-          },
-          { $sort: { createdAt: -1 } }
-        ]).toArray();
+        const theses = await proposalsCollection
+          .aggregate([
+            { $match: filter },
+            {
+              $lookup: {
+                from: "users",
+                localField: "supervisor",
+                foreignField: "_id",
+                as: "supervisorInfo",
+              },
+            },
+            {
+              $lookup: {
+                from: "groups",
+                localField: "groupId",
+                foreignField: "_id",
+                as: "groupInfo",
+              },
+            },
+            { $unwind: "$groupInfo" },
+            {
+              $lookup: {
+                from: "users",
+                localField: "groupInfo.members",
+                foreignField: "_id",
+                as: "studentMembers",
+              },
+            },
+            {
+              $project: {
+                title: 1,
+                status: 1,
+                createdAt: 1,
+                domain: 1, // <--- include domain
+                supervisor: { $arrayElemAt: ["$supervisorInfo", 0] },
+                students: "$studentMembers",
+                groupName: "$groupInfo.name",
+              },
+            },
+            { $sort: { createdAt: -1 } },
+          ])
+          .toArray();
 
         res.status(200).send(theses);
       } catch (err) {
@@ -2325,9 +2620,6 @@ async function run() {
         res.status(500).send({ message: "Internal server error" });
       }
     });
-
-
-    
 
     await client.db("admin").command({ ping: 1 });
     console.log("Connected to MongoDB");
