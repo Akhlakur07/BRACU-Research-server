@@ -24,7 +24,7 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
     const db = client.db("bracu-admin");
     const userCollection = db.collection("users");
     const announcementsCollection = db.collection("announcements");
@@ -2847,7 +2847,7 @@ async function run() {
       }
     });
 
-    await client.db("admin").command({ ping: 1 });
+    // await client.db("admin").command({ ping: 1 });
     console.log("Connected to MongoDB");
   } catch (error) {
     console.error("Mongo error:", error);
