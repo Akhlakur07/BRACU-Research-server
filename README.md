@@ -236,9 +236,3 @@ DB_PASS=ePUqucSrt2lUJ7Dc
 * Integration with BRACU’s institutional repository
 
 ---
-
-## 📄 License
-
-This project is licensed under the **MIT License** — you are free to use, modify, and distribute it with attribution.
-
-
