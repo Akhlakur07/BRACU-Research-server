@@ -46,10 +46,10 @@ async function run() {
       res.send(result);
     });
 
-    await groupsCollection.createIndex(
-      { assignedSupervisor: 1, startingSemester: 1 },
-      { name: "cap_count_idx" }
-    );
+    // await groupsCollection.createIndex(
+    //   { assignedSupervisor: 1, startingSemester: 1 },
+    //   { name: "cap_count_idx" }
+    // );
 
     // run once
     await groupsCollection.updateMany(
