@@ -1,3 +1,8 @@
+const dns = require("dns");
+try {
+  dns.setServers(["8.8.8.8", "1.1.1.1"]);
+} catch (_) {}
+
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
@@ -5,6 +10,182 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 const axios = require("axios");
 const xml2js = require("xml2js");
+
+const BRACU_CSE_BASE = "https://cse.bracu.ac.bd";
+const CACHE_TTL_MS = 10 * 60 * 1000;
+const bracuCache = {
+  supervisors: { data: null, fetchedAt: 0 },
+  synopses: { data: null, fetchedAt: 0 },
+};
+
+function decodeHtmlEntities(str = "") {
+  return String(str)
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeBracuUrl(url) {
+  if (!url) return null;
+  const trimmed = String(url).trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("/")) return `${BRACU_CSE_BASE}${trimmed}`;
+  return trimmed;
+}
+
+function parseSupervisorsHtml(html) {
+  const results = [];
+  const cardRegex =
+    /<div wire:id="[^"]+" wire:initial-data="([^"]+)">\s*<div class="relative fac-card">([\s\S]*?)<!-- Livewire Component wire-end:/g;
+  let match;
+  while ((match = cardRegex.exec(html)) !== null) {
+    const wireDataRaw = match[1].replace(/&quot;/g, '"');
+    let facId = null;
+    try {
+      const parsed = JSON.parse(wireDataRaw);
+      facId = parsed?.serverMemo?.data?.facId ?? null;
+    } catch (_) {}
+    const body = match[2];
+
+    const badgeMatch = body.match(/rounded-b-md[^>]*>([^<]+)</);
+    const levelBadge = badgeMatch ? decodeHtmlEntities(badgeMatch[1]) : "";
+
+    const profileMatch = body.match(
+      /<a[^>]+href="(https:\/\/cse\.bracu\.ac\.bd\/faculty_profile\/[^"]+)"/
+    );
+    const profileUrl = profileMatch ? profileMatch[1] : "";
+
+    const imgMatch = body.match(/<img[^>]+src="([^"]+)"/);
+    const photoUrl = imgMatch ? normalizeBracuUrl(imgMatch[1]) : null;
+
+    const nameMatch = body.match(
+      /<p class="text-sm font-semibold text-center text-black[^"]*">([\s\S]*?)<\/p>/
+    );
+    const name = nameMatch ? decodeHtmlEntities(nameMatch[1]) : "";
+
+    const statusMatch = body.match(
+      /rounded-full"><\/div>\s*<p[^>]*>([\s\S]*?)<\/p>/
+    );
+    const status = statusMatch ? decodeHtmlEntities(statusMatch[1]) : "";
+
+    const desigMatch = body.match(
+      /<p class="text-xs font-medium text-center md:text-sm text-slate-700">([\s\S]*?)<\/p>/
+    );
+    const designation = desigMatch ? decodeHtmlEntities(desigMatch[1]) : "";
+
+    const emailMatch = body.match(
+      /<p class="text-xs text-center md:text-sm text-slate-500">([\s\S]*?)<\/p>/
+    );
+    const email = emailMatch ? decodeHtmlEntities(emailMatch[1]) : "";
+
+    if (name) {
+      results.push({
+        id: facId || profileUrl || email || name,
+        facId,
+        name,
+        designation,
+        email,
+        status,
+        accepting: status.toLowerCase() === "accepting",
+        levelBadge,
+        photoUrl,
+        profileUrl,
+      });
+    }
+  }
+  return results;
+}
+
+function parseSynopsesHtml(html) {
+  const results = [];
+  const cardRegex =
+    /<div class="w-full mb-4">\s*<div class="synop-card[\s\S]*?<a\s+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<div class="flex items-center justify-start gap-2">([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/g;
+  let match;
+  while ((match = cardRegex.exec(html)) !== null) {
+    const url = match[1].trim();
+    const title = decodeHtmlEntities(match[2].replace(/<[^>]+>/g, ""));
+    const supBlock = match[3];
+
+    const imgMatch = supBlock.match(/<img[^>]+src="([^"]+)"/);
+    const photoUrl = imgMatch ? normalizeBracuUrl(imgMatch[1]) : null;
+
+    const pMatches = [...supBlock.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)];
+    const supervisorName = pMatches[0]
+      ? decodeHtmlEntities(pMatches[0][1])
+      : "";
+    const supervisorEmail = pMatches[1]
+      ? decodeHtmlEntities(pMatches[1][1])
+      : "";
+
+    const idMatch = url.match(/\/synopsis\/(\d+)\//);
+    const id = idMatch ? Number(idMatch[1]) : url;
+
+    results.push({
+      id,
+      title,
+      url,
+      supervisorName,
+      supervisorEmail,
+      photoUrl,
+    });
+  }
+  return results;
+}
+
+function parseSynopsisDetailHtml(html, url) {
+  const sectionIdx = html.indexOf('id="section-to-print"');
+  const contentIdx = html.indexOf('<div class="mt-4 ck-content');
+  const headerSlice =
+    sectionIdx !== -1 && contentIdx > sectionIdx
+      ? html.slice(sectionIdx, contentIdx)
+      : html;
+
+  const titleMatch = headerSlice.match(
+    /<h4 class="mt-6 mb-2[^"]*">([\s\S]*?)<\/h4>/
+  );
+  const title = titleMatch ? decodeHtmlEntities(titleMatch[1]) : "";
+
+  const supLinkMatch = headerSlice.match(
+    /<a class="link w-fit" href="([^"]+)">\s*<p[^>]*>([\s\S]*?)<\/p>\s*<\/a>\s*<p>([\s\S]*?)<\/p>/
+  );
+  const profileUrl = supLinkMatch ? supLinkMatch[1].trim() : "";
+  const supervisorName = supLinkMatch
+    ? decodeHtmlEntities(supLinkMatch[2])
+    : "";
+  const designation = supLinkMatch ? decodeHtmlEntities(supLinkMatch[3]) : "";
+
+  const emailMatch = headerSlice.match(
+    /<\/svg>\s*<\/span>\s*([^\s<]+@[^\s<]+)/
+  );
+  const supervisorEmail = emailMatch ? decodeHtmlEntities(emailMatch[1]) : "";
+
+  const imgMatch = headerSlice.match(/<img[^>]+src="([^"]+)"/);
+  const photoUrl = imgMatch ? normalizeBracuUrl(imgMatch[1]) : null;
+
+  const contentMatch = html.match(
+    /<div class="mt-4 ck-content[^"]*">([\s\S]*?)<\/div>\s*<\/div>\s*<script>/
+  );
+  const contentHtml = contentMatch
+    ? contentMatch[1].replace(/<script[\s\S]*?<\/script>/gi, "").trim()
+    : "";
+
+  return {
+    title,
+    supervisorName,
+    designation,
+    supervisorEmail,
+    profileUrl,
+    photoUrl,
+    contentHtml,
+    url,
+  };
+}
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -51,20 +232,7 @@ async function run() {
     //   { name: "cap_count_idx" }
     // );
 
-    // run once
-    await groupsCollection.updateMany(
-      {
-        startingSemester: { $exists: false },
-        "startingSemesterInfo._id": { $type: "objectId" },
-      },
-      [
-        {
-          $set: {
-            startingSemester: "$startingSemesterInfo._id",
-          },
-        },
-      ]
-    );
+    // Startup migration is deferred until after all routes are registered below.
 
     //Get all users
     app.get("/users", async (req, res) => {
@@ -2846,6 +3014,112 @@ async function run() {
         res.status(500).send({ message: "Internal server error" });
       }
     });
+
+    // Live BRACU CSE Supervisors list (from https://cse.bracu.ac.bd/thesis/supervising/list)
+    app.get("/bracu-supervisors", async (req, res) => {
+      try {
+        const forceRefresh = req.query.refresh === "true";
+        const now = Date.now();
+        if (
+          !forceRefresh &&
+          bracuCache.supervisors.data &&
+          now - bracuCache.supervisors.fetchedAt < CACHE_TTL_MS
+        ) {
+          return res.send(bracuCache.supervisors.data);
+        }
+
+        const response = await axios.get(
+          `${BRACU_CSE_BASE}/thesis/supervising/list`,
+          { timeout: 15000 }
+        );
+        const parsed = parseSupervisorsHtml(response.data);
+        bracuCache.supervisors = { data: parsed, fetchedAt: now };
+        res.send(parsed);
+      } catch (err) {
+        console.error("GET /bracu-supervisors error:", err.message);
+        if (bracuCache.supervisors.data) {
+          return res.send(bracuCache.supervisors.data);
+        }
+        res
+          .status(502)
+          .send({ message: "Failed to fetch BRACU CSE supervisors" });
+      }
+    });
+
+    // Live BRACU CSE Synopses list (from https://cse.bracu.ac.bd/thesis/synopsis)
+    const handleGetSynopses = async (req, res) => {
+      try {
+        const forceRefresh = req.query.refresh === "true";
+        const now = Date.now();
+        if (
+          !forceRefresh &&
+          bracuCache.synopses.data &&
+          now - bracuCache.synopses.fetchedAt < CACHE_TTL_MS
+        ) {
+          return res.send(bracuCache.synopses.data);
+        }
+
+        const response = await axios.get(`${BRACU_CSE_BASE}/thesis/synopsis`, {
+          timeout: 15000,
+        });
+        const parsed = parseSynopsesHtml(response.data);
+        bracuCache.synopses = { data: parsed, fetchedAt: now };
+        res.send(parsed);
+      } catch (err) {
+        console.error("GET /synopses error:", err.message);
+        if (bracuCache.synopses.data) {
+          return res.send(bracuCache.synopses.data);
+        }
+        res.status(502).send({ message: "Failed to fetch BRACU CSE synopses" });
+      }
+    };
+
+    app.get("/synopses", handleGetSynopses);
+    app.get("/synopsis", handleGetSynopses);
+
+    // Live BRACU CSE Synopsis detail
+    app.get("/synopsis/detail", async (req, res) => {
+      try {
+        const { url } = req.query;
+        if (
+          typeof url !== "string" ||
+          !url.startsWith(`${BRACU_CSE_BASE}/thesis/synopsis/`)
+        ) {
+          return res.status(400).send({
+            message:
+              "Invalid synopsis URL. Must start with https://cse.bracu.ac.bd/thesis/synopsis/",
+          });
+        }
+
+        const response = await axios.get(url, { timeout: 15000 });
+        const detail = parseSynopsisDetailHtml(response.data, url);
+        res.send(detail);
+      } catch (err) {
+        console.error("GET /synopsis/detail error:", err.message);
+        res
+          .status(502)
+          .send({ message: "Failed to fetch synopsis detail from BRACU CSE" });
+      }
+    });
+
+    // Run startup migration safely after all routes are registered
+    try {
+      await groupsCollection.updateMany(
+        {
+          startingSemester: { $exists: false },
+          "startingSemesterInfo._id": { $type: "objectId" },
+        },
+        [
+          {
+            $set: {
+              startingSemester: "$startingSemesterInfo._id",
+            },
+          },
+        ]
+      );
+    } catch (migrationErr) {
+      console.warn("Startup migration warning:", migrationErr.message);
+    }
 
     // await client.db("admin").command({ ping: 1 });
     console.log("Connected to MongoDB");
