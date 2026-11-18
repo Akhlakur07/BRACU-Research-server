@@ -3,7 +3,6 @@
 > **Express.js & MongoDB REST API powering BRACU Research Connect — handling users, groups, proposals, semesters, meetings, announcements, FAQs, arXiv paper search, and live BRACU CSE supervisor & synopsis syncing.**
 
 🌐 **Live Frontend:** [https://brac-research-connect.vercel.app/](https://brac-research-connect.vercel.app/)  
-🔗 **Live Backend API:** [https://bracu-research-server-teal.vercel.app/](https://bracu-research-server-teal.vercel.app/)
 
 ---
 
